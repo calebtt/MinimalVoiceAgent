@@ -15,12 +15,6 @@ public class TtsStreamer
     private readonly object _lock = new();
 
     /// <summary>
-    /// Event raised when full PCMU audio needs echo cancellation registration.
-    /// Subscriber (e.g., endpoint) should handle registration for the complete response.
-    /// </summary>
-    public event EventHandler<byte[]>? OnEchoRegistrationRequired;
-
-    /// <summary>
     /// Event raised when full PCMU audio is ready for sending (e.g., to RTP pacer).
     /// Subscriber should forward to pacer, which handles splitting/pacing/filtering.
     /// </summary>
@@ -101,9 +95,6 @@ public class TtsStreamer
                 offset += chunk.Length;
             }
 
-            // Register full audio for echo cancellation (pacer/endpoint can split if needed)
-            OnEchoRegistrationRequired?.Invoke(this, fullPcmu);
-
             // Send full to pacer (it splits into 20ms frames, paces, and applies filters like volume)
             OnAudioChunkReady?.Invoke(this, fullPcmu);
 
@@ -147,7 +138,6 @@ public class TtsStreamer
         Stop();
         _cancellationSource?.Dispose();
         _cancellationSource = null;
-        OnEchoRegistrationRequired = null;
         OnAudioChunkReady = null;
     }
 }
