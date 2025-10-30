@@ -1,0 +1,188 @@
+{
+  "LanguageModel": {
+    "ApiKeyEnvironmentVariable": "GROK_API_KEY",
+    "Model": "grok-4-fast-non-reasoning",
+    "EndPoint": "https://api.x.ai/v1",
+    "MaxTokens": 300,
+    "WelcomeMessage": "Hello! This is the local voice assistant for Caleb's nerdy computer setup. How can I assist with your tech tasks today?",
+    "WelcomeFilePath": "recordings/welcome_message.wav",
+    "InstructionsText": "You are a professional local voice assistant for Caleb's computer in Tennessee. Handle voice commands for system control, info, and productivity. Keep responses concise—1-3 sentences max. Confirm actions: \"Done, [summary].\" For complex requests, use tools or suggest alternatives. End interactions: \"All set—let me know if you need more!\"",
+    "InstructionsAddendum": "\n\nLocal Actions: Use adjust_system_volume for mute/volume (e.g., while watching TV), get_system_info for hardware checks, set_timer for builds/reminders, perform_calculation for math/code, get_current_datetime for time, set_local_reminder for notes. Logs: Use send_notification for persistent notes.",
+    "ToolGuidance": "\n\nAvailable tools: Use 'adjust_system_volume' to mute (level=-1) or set volume (0-100)—e.g., 'mute TV' → level=-1. Use 'get_system_info' for CPU/memory ('cpu', 'memory', 'all'). Use 'set_timer' for durations (seconds, message). Use 'perform_calculation' for expressions. Use 'get_current_datetime' for time (timeZoneId). Use 'set_local_reminder' for future notes (message, dueTime). Use 'send_notification' to log issues/notes (issue, urgency). Use 'end_conversation' after actions (reason). Use 'schedule_followup' for external. MANDATORY RULES:\n1. SYSTEM FIRST: For volume/mute/hardware/timer, invoke relevant tool immediately—e.g., 'lower volume' → adjust_system_volume level=50.\n2. NOTES: Invoke send_notification for logs.\n3. END: After actions, invoke end_conversation.\n4. OTHER: Respond if no tool; tool then 1-2 sentences.",
+    "Temperature": 0.1,
+    "tools": [
+      {
+        "name": "adjust_system_volume",
+        "description": "Adjust the system volume, e.g., mute while watching TV or lower for a call.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "level": {
+              "type": "integer",
+              "description": "Volume level (0-100; negative for mute)",
+              "required": true
+            }
+          }
+        }
+      },
+      {
+        "name": "get_system_info",
+        "description": "Get basic system information like CPU usage, memory, or hardware specs for troubleshooting.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "infoType": {
+              "type": "string",
+              "description": "Type of info (e.g., 'cpu', 'memory', 'all')",
+              "required": false,
+              "default": "all"
+            }
+          }
+        }
+      },
+      {
+        "name": "set_timer",
+        "description": "Set a timer that logs or alerts after a duration (e.g., '5 minutes for compile').",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "durationSeconds": {
+              "type": "integer",
+              "description": "Duration in seconds",
+              "required": true
+            },
+            "message": {
+              "type": "string",
+              "description": "Message for when timer ends",
+              "required": false,
+              "default": "Timer ended."
+            }
+          }
+        }
+      },
+      {
+        "name": "perform_calculation",
+        "description": "Perform a simple mathematical calculation, e.g., for quick arithmetic or code snippets.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "expression": {
+              "type": "string",
+              "description": "Mathematical expression (e.g., '2 + 3 * 4')",
+              "required": true
+            }
+          }
+        }
+      },
+      {
+        "name": "get_current_datetime",
+        "description": "Retrieve the current local date and time, useful for scheduling or time-based queries.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "timeZoneId": {
+              "type": "string",
+              "description": "Time zone ID (default: local system time zone)",
+              "required": false,
+              "default": null
+            }
+          }
+        }
+      },
+      {
+        "name": "set_local_reminder",
+        "description": "Set a simple in-memory reminder (persists only during runtime; e.g., 'buy new GPU next week').",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string",
+              "description": "Reminder message",
+              "required": true
+            },
+            "dueTime": {
+              "type": "string",
+              "description": "Due time offset from now (e.g., 'in 30 minutes', 'tomorrow at 9AM')",
+              "required": true
+            }
+          }
+        }
+      },
+      {
+        "name": "send_notification",
+        "description": "Log a message or issue for follow-up (treat 'message' as issue for general interactions).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "issue": {
+              "type": "string",
+              "description": "Message content or issue description",
+              "required": true
+            },
+            "location": {
+              "type": "string",
+              "description": "Location or context (optional)",
+              "required": false,
+              "default": ""
+            },
+            "urgency": {
+              "type": "string",
+              "description": "Urgency level (default 'medium')",
+              "required": false,
+              "default": "medium",
+              "enum": [ "low", "medium", "high" ]
+            },
+            "caller_name": {
+              "type": "string",
+              "description": "User's name",
+              "required": false,
+              "default": ""
+            }
+          }
+        }
+      },
+      {
+        "name": "end_conversation",
+        "description": "Gracefully end the interaction after action or resolution.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "reason": {
+              "type": "string",
+              "description": "Reason (e.g., 'task completed', 'resolved')",
+              "required": false,
+              "default": ""
+            }
+          }
+        }
+      },
+      {
+        "name": "schedule_followup",
+        "description": "Schedule a follow-up if mentioned (e.g., callback).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "service_type": {
+              "type": "string",
+              "description": "Type (default 'callback')",
+              "required": false,
+              "default": "callback"
+            },
+            "location": {
+              "type": "string",
+              "description": "Context or location (optional)",
+              "required": false,
+              "default": ""
+            },
+            "preferred_time": {
+              "type": "string",
+              "description": "Preferred time (e.g., 'tomorrow')",
+              "required": false,
+              "default": ""
+            }
+          }
+        }
+      }
+    ]
+  }
+}
