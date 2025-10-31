@@ -3,23 +3,22 @@ using MinimalSileroVAD.Core;
 
 namespace MinimalVoiceAgent;
 
-public class VoiceAgentCore
+public class VoiceAgentCore : IAsyncDisposable
 {
     private const float VolumeLoweringFactor = 0.35f;
 
     private readonly SttProviderStreaming _streamingSttClient;
     private readonly LlmChat _llmChat;
     private readonly TtsStreamer _ttsStreamer;
-    private readonly RtpAudioPacer _audioPacer;
+    private readonly AudioPacer _audioPacer;
 
-    private CancellationTokenSource? _cancellationTokenSource = null;
-    private IVadSpeechSegmenter? _vad = null;
+    private CancellationTokenSource? _cancellationTokenSource;
+    private IVadSpeechSegmenter? _vad;
 
-    // Streaming STT and interruption handling
     private readonly object _processingLock = new();
-    private bool _isProcessingTranscription = false;
+    private bool _isProcessingTranscription;
 
-    private bool disposedValue;
+    private bool _isDisposed;
 
     public event Action<byte[]>? OnAudioReplyReady;
 
@@ -27,7 +26,7 @@ public class VoiceAgentCore
         SttProviderStreaming streamingSttClient,
         LlmChat llmChat,
         TtsStreamer ttsStreamer,
-        RtpAudioPacer audioPacer)
+        AudioPacer audioPacer)
     {
         _streamingSttClient = streamingSttClient ?? throw new ArgumentNullException(nameof(streamingSttClient));
         _llmChat = llmChat ?? throw new ArgumentNullException(nameof(llmChat));
@@ -35,7 +34,6 @@ public class VoiceAgentCore
         _audioPacer = audioPacer ?? throw new ArgumentNullException(nameof(audioPacer));
         _ttsStreamer.OnAudioChunkReady += (sender, chunk) => OnAudioReplyReady?.Invoke(chunk!);
 
-        // Subscribe to streaming STT events
         _streamingSttClient.TranscriptionComplete += OnTranscriptionComplete;
 
         Log.Information("VoiceAgentCore created.");
@@ -49,12 +47,10 @@ public class VoiceAgentCore
         {
             _cancellationTokenSource = new CancellationTokenSource();
 
-            // Initialize VAD for speech segmentation
             _vad = vadSegmenter ?? throw new ArgumentNullException(nameof(vadSegmenter));
 
-            bool volumeFilterActive = false; // Local; use volatile if multi-threaded contention
+            bool volumeFilterActive = false;
 
-            // VAD sentence begin: lower TTS volume during user speech
             _vad.SentenceBegin += (sender, e) =>
             {
                 Log.Information("VAD: Speech segment started.");
@@ -63,7 +59,7 @@ public class VoiceAgentCore
                 {
                     Log.Information("VAD: Applying volume filter during potential interrupt activation.");
 
-                    _audioPacer.ApplyFilter(chunk => AudioAlgos.AdjustPcmuVolume(chunk, VolumeLoweringFactor));
+                    _audioPacer.ApplyFilter(chunk => AudioAlgos.AdjustPcmVolume(chunk, VolumeLoweringFactor));
                     volumeFilterActive = true;
                 }
             };
@@ -82,7 +78,6 @@ public class VoiceAgentCore
                     Log.Information("VAD: Volume filter cleared after speech segment.");
                 }
 
-                // Process through streaming STT for real-time detection
                 _streamingSttClient.ProcessAudioChunkAsync(pcmStream).Wait();
             };
 
@@ -96,11 +91,12 @@ public class VoiceAgentCore
         }
     }
 
-    public Task ShutdownAsync()
+    public async Task ShutdownAsync()
     {
         try
         {
-            _cancellationTokenSource?.Cancel();
+            if(_cancellationTokenSource != null)
+                await _cancellationTokenSource!.CancelAsync();
 
             _vad?.Dispose();
             _vad = null;
@@ -109,20 +105,15 @@ public class VoiceAgentCore
             _ttsStreamer.Dispose();
             _audioPacer.ResetBuffer();
             Log.Information("VoiceAgentCore shutdown complete.");
-            return Task.CompletedTask;
+            return;
         }
         catch (Exception ex)
         {
             Log.Error(ex, "Error during VoiceAgentCore shutdown");
         }
-        return Task.CompletedTask;
+        return;
     }
 
-    /// <summary>
-    /// Process incoming audio chunk (16kHz PCM) for VAD detection.
-    /// Assumed to be RTP sized chunks of audio FROM CELLPHONE USER.
-    /// Audio is pushed into VAD for segmentation.
-    /// </summary>
     public void ProcessIncomingAudioChunk(byte[] pcm16Khz)
     {
         if (_vad == null || _cancellationTokenSource?.IsCancellationRequested == true)
@@ -131,9 +122,6 @@ public class VoiceAgentCore
         _vad.PushFrame(pcm16Khz, 16_000, 20);
     }
 
-    /// <summary>
-    /// Interrupt current playback (e.g., from external trigger).
-    /// </summary>
     public void InterruptPlayback()
     {
         if (_audioPacer.IsAudioPlaying)
@@ -211,23 +199,71 @@ public class VoiceAgentCore
 
     protected virtual void Dispose(bool disposing)
     {
-        if (!disposedValue)
+        if (_isDisposed)
+            return;
+
+        if (disposing)
         {
-            if (disposing)
+            // Sync disposal: Only managed resources; no async here to avoid blocks
+            try
             {
-                ShutdownAsync().GetAwaiter().GetResult(); // Sync in Dispose (safe)
-
-                // Unsubscribe from events
                 _streamingSttClient.TranscriptionComplete -= OnTranscriptionComplete;
+                // Other sync cleanups (e.g., _vad?.Dispose();)
             }
-
-            disposedValue = true;
+            catch (Exception ex)
+            {
+                // Log but don't re-throw in Dispose (per guidelines)
+                Log.Error(ex, "Error during managed disposal in VoiceAgentCore.");
+            }
         }
+
+        // Unmanaged cleanup here if needed (e.g., native handles)
+
+        _isDisposed = true;
+    }
+
+    protected virtual async ValueTask DisposeAsyncCore()  // Private async core
+    {
+        if (_isDisposed)
+            return;
+
+        if (_cancellationTokenSource?.IsCancellationRequested != true)  // Avoid redundant shutdown if already canceling
+        {
+            try
+            {
+                // Await async shutdown non-blockingly
+                await ShutdownAsync().ConfigureAwait(false);
+            }
+            catch (OperationCanceledException)
+            {
+                Log.Debug("Shutdown canceled during async disposal.");
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Error during async shutdown in VoiceAgentCore disposal.");
+            }
+        }
+
+        // Managed cleanup (events, etc.)—can be async if needed
+        _streamingSttClient.TranscriptionComplete -= OnTranscriptionComplete;
+
+        _isDisposed = true;
     }
 
     public void Dispose()
     {
-        Dispose(disposing: true);
+        Dispose(true);
         GC.SuppressFinalize(this);
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await DisposeAsyncCore().ConfigureAwait(false);
+        GC.SuppressFinalize(this);
+    }
+
+    ~VoiceAgentCore()
+    {
+        Dispose(false);
     }
 }

@@ -20,6 +20,7 @@ public class ComputerToolFunctions
     private readonly JsonSerializerOptions _jsonOptions = new() { WriteIndented = true, DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull };
     private readonly Dictionary<DateTimeOffset, string> _localReminders = new(); // In-memory reminders
     private readonly List<System.Timers.Timer> _activeTimers = new(); // For managing timers
+    private const int VolumeStep = 10; // Fixed step size for raise/lower (10% increments)
 
     /// <summary>
     /// Primary constructor: No external dependencies; uses system APIs directly.
@@ -121,43 +122,132 @@ public class ComputerToolFunctions
         }
     }
 
-    [KernelFunction("adjust_system_volume")]
-    [Description("Adjust the system volume, e.g., mute while watching TV or lower for a call.")]
-    public virtual async Task<string> AdjustSystemVolumeAsync(
-        [Description("Volume level (0-100; negative for mute)")] int level)
+    [KernelFunction("lower_volume")]
+    [Description("Lower the system volume by a fixed step (10%). Supported on Windows only.")]
+    public virtual async Task<string> LowerVolumeAsync()
     {
         try
         {
-            if (RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
-            {
-                using var deviceEnumerator = new MMDeviceEnumerator();
-                using var defaultDevice = deviceEnumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
-
-                if (level < 0)
-                {
-                    defaultDevice.AudioEndpointVolume.Mute = true;
-                    Log.Information("System volume muted.");
-                    return JsonSerializer.Serialize(new { status = "success", message = "System volume muted." }, _jsonOptions);
-                }
-                else
-                {
-                    level = Math.Clamp(level, 0, 100);
-                    defaultDevice.AudioEndpointVolume.MasterVolumeLevelScalar = level / 100f;
-                    defaultDevice.AudioEndpointVolume.Mute = false;
-                    Log.Information("System volume set to {Level}%.", level);
-                    return JsonSerializer.Serialize(new { status = "success", message = $"System volume set to {level}%." }, _jsonOptions);
-                }
-            }
-            else
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
             {
                 throw new PlatformNotSupportedException("Volume control supported on Windows only.");
             }
 
+            using var deviceEnumerator = new MMDeviceEnumerator();
+            using var defaultDevice = deviceEnumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+
+            var currentLevel = (int)(defaultDevice.AudioEndpointVolume.MasterVolumeLevelScalar * 100);
+            var newLevel = Math.Max(0, currentLevel - VolumeStep);
+            defaultDevice.AudioEndpointVolume.MasterVolumeLevelScalar = newLevel / 100f;
+            defaultDevice.AudioEndpointVolume.Mute = false;  // Unmute if adjusting
+
+            Log.Information("System volume lowered from {Current}% to {New}%.", currentLevel, newLevel);
+
             await Task.CompletedTask;
+
+            return JsonSerializer.Serialize(new { status = "success", message = $"System volume lowered to {newLevel}%." }, _jsonOptions);
         }
         catch (Exception ex)
         {
-            Log.Error(ex, "Tool execution failed for adjust_system_volume: {Message}", ex.Message);
+            Log.Error(ex, "Tool execution failed for lower_volume: {Message}", ex.Message);
+            return JsonSerializer.Serialize(new { error = "Execution failed", details = ex.Message }, _jsonOptions);
+        }
+    }
+
+    [KernelFunction("raise_volume")]
+    [Description("Raise the system volume by a fixed step (10%). Supported on Windows only.")]
+    public virtual async Task<string> RaiseVolumeAsync()
+    {
+        try
+        {
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                throw new PlatformNotSupportedException("Volume control supported on Windows only.");
+            }
+
+            using var deviceEnumerator = new MMDeviceEnumerator();
+            using var defaultDevice = deviceEnumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+
+            var currentLevel = (int)(defaultDevice.AudioEndpointVolume.MasterVolumeLevelScalar * 100);
+            var newLevel = Math.Min(100, currentLevel + VolumeStep);
+            defaultDevice.AudioEndpointVolume.MasterVolumeLevelScalar = newLevel / 100f;
+            defaultDevice.AudioEndpointVolume.Mute = false;  // Unmute if adjusting
+
+            Log.Information("System volume raised from {Current}% to {New}%.", currentLevel, newLevel);
+
+            await Task.CompletedTask;
+
+            return JsonSerializer.Serialize(new { status = "success", message = $"System volume raised to {newLevel}%." }, _jsonOptions);
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Tool execution failed for raise_volume: {Message}", ex.Message);
+            return JsonSerializer.Serialize(new { error = "Execution failed", details = ex.Message }, _jsonOptions);
+        }
+    }
+
+    [KernelFunction("mute_volume")]
+    [Description("Mute the system volume (sets mute to true). Supported on Windows only.")]
+    public virtual async Task<string> MuteVolumeAsync()
+    {
+        try
+        {
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                throw new PlatformNotSupportedException("Volume control supported on Windows only.");
+            }
+
+            using var deviceEnumerator = new MMDeviceEnumerator();
+            using var defaultDevice = deviceEnumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+
+            var wasMuted = defaultDevice.AudioEndpointVolume.Mute;
+            defaultDevice.AudioEndpointVolume.Mute = true;
+
+            Log.Information("System volume muted (was already muted: {WasMuted}).", wasMuted);
+
+            await Task.CompletedTask;
+
+            return JsonSerializer.Serialize(new { status = "success", message = "System volume muted." }, _jsonOptions);
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Tool execution failed for mute_volume: {Message}", ex.Message);
+            return JsonSerializer.Serialize(new { error = "Execution failed", details = ex.Message }, _jsonOptions);
+        }
+    }
+
+    [KernelFunction("get_system_volume")]
+    [Description("Retrieve the current system volume level (0-100) and mute status. Supported on Windows only.")]
+    public virtual async Task<string> GetSystemVolumeAsync()
+    {
+        try
+        {
+            if (!RuntimeInformation.IsOSPlatform(OSPlatform.Windows))
+            {
+                throw new PlatformNotSupportedException("Volume control supported on Windows only.");
+            }
+
+            using var deviceEnumerator = new MMDeviceEnumerator();
+            using var defaultDevice = deviceEnumerator.GetDefaultAudioEndpoint(DataFlow.Render, Role.Multimedia);
+
+            var level = (int)(defaultDevice.AudioEndpointVolume.MasterVolumeLevelScalar * 100);
+            var isMuted = defaultDevice.AudioEndpointVolume.Mute;
+
+            Log.Information("Current system volume: {Level}% (muted: {IsMuted}).", level, isMuted);
+
+            await Task.CompletedTask;
+
+            return JsonSerializer.Serialize(new
+            {
+                status = "success",
+                level = level,
+                isMuted = isMuted,
+                message = $"Current volume: {level}% (muted: {isMuted})."
+            }, _jsonOptions);
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Tool execution failed for get_system_volume: {Message}", ex.Message);
             return JsonSerializer.Serialize(new { error = "Execution failed", details = ex.Message }, _jsonOptions);
         }
     }

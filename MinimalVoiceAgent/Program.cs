@@ -1,8 +1,12 @@
-﻿using NAudio.Wave;
+﻿using AudioProcessingModuleCs;
+using AudioProcessingModuleCs.Media.Dsp.WebRtc;
+using MinimalSileroVAD.Core;
+using NAudio.Wave;
 using Serilog;
 using Serilog.Events;
 using Serilog.Extensions.Logging;
-using MinimalSileroVAD.Core;
+using System.Runtime.InteropServices;
+using System;
 
 namespace MinimalVoiceAgent;
 
@@ -13,6 +17,9 @@ public class Program
     private static BufferedWaveProvider? _bufferedWaveProvider;
     private static VoiceAgentCore? _voiceAgentCore;
     private static CancellationTokenSource _cts = new();
+    private static WebRtcFilter? _webRtcFilter;
+    private static AudioProcessingConfig _audioConfig = AudioProcessingConfig.CreateDefault();
+    private static AudioPacer? _audioPacer;  // New merged pacer
 
     public static async Task Main(string[] args)
     {
@@ -21,32 +28,66 @@ public class Program
         var lmConfig = await Algos.LoadLanguageModelConfigAsync("profiles/personal.json");
         var sttConfig = await Algos.LoadSttSettingsAsync("sttsettings.json");
 
-        // Initialize TTS provider (assumes global/static init as in original)
+        // Initialize TTS provider
         await TtsProviderStreaming.InitializeAsync();
 
-        // Stub tool functions since no SIP (hangup and transfer do nothing)
+        // Stub tool functions
         var computerToolFunctions = new ComputerToolFunctions();
 
         // Build Semantic Kernel
         var kernel = Algos.BuildKernel(lmConfig);
 
         // Initialize core components
-        var stt = new SttProviderStreaming(sttConfig.SttModelUrl);
+        var stt = new SttProviderStreaming();
+        await stt.InitializeAsync(sttConfig.SttModelUrl);
         var llm = new LlmChat(lmConfig, computerToolFunctions, kernel);
-        var tts = new TtsStreamer(); // Assumes TtsStreamer is defined; handles streaming TTS
-        var audioPacer = new RtpAudioPacer(); // Assumes RtpAudioPacer is defined; for buffering/playing TTS
+        var tts = new TtsStreamer();
+        _audioPacer = new AudioPacer();
 
-        _voiceAgentCore = new VoiceAgentCore(stt, llm, tts, audioPacer);
+        _voiceAgentCore = new VoiceAgentCore(stt, llm, tts, _audioPacer);
         await _voiceAgentCore.InitializeAsync(new VadSpeechSegmenterSileroV5());
 
-        // Hook up audio reply event to play TTS chunks
+        // Hook up audio reply event to play TTS chunks (now PCM)
         _voiceAgentCore.OnAudioReplyReady += OnAudioReplyReady;
+
+        // Initialize audio formats for WebRTC filter (16kHz mono 16-bit)
+        var recordedFormat = new AudioProcessingModuleCs.Media.AudioFormat(
+            samplesPerSecond: _audioConfig.ProcessingSampleRate,  // 16000
+            millisecondsPerFrame: _audioConfig.FrameSizeMs,  // 20
+            channels: _audioConfig.Channels,  // 1
+            bitsPerSample: _audioConfig.BitsPerSample  // 16
+        );
+
+        var playedFormat = recordedFormat;  // Same for playback
+
+        // Initialize WebRTC filter
+        _webRtcFilter = new WebRtcFilter(
+            expectedAudioLatency: _audioConfig.SystemLatencyMs,
+            filterLength: _audioConfig.FilterLengthMs,
+            recordedAudioFormat: recordedFormat,
+            playedAudioFormat: playedFormat,
+            enableAec: _audioConfig.EnableEchoCancellation,
+            enableDenoise: _audioConfig.EnableNoiseSuppression,
+            enableAgc: _audioConfig.EnableAutomaticGainControl
+        );
+
+        // Enable WebRTC in pacer if configured
+        if (_audioConfig.EnableEchoCancellation)
+        {
+            _audioPacer.EnableWebRtcProcessing(_webRtcFilter);
+        }
 
         // Setup microphone and speaker
         SetupMicrophone();
         SetupSpeaker();
 
-        // Play welcome message immediately after init
+        // Initialize pacer for playback: Adds samples to buffered provider
+        _audioPacer.Initialize((pcmFrame) =>
+        {
+            _bufferedWaveProvider?.AddSamples(pcmFrame, 0, pcmFrame.Length);
+        });
+
+        // Play welcome message
         await PlayWelcomeMessageAsync(lmConfig, tts);
 
         Log.Information("Minimal Voice Agent started. Speak into the microphone. Press any key to exit.");
@@ -88,11 +129,9 @@ public class Program
     {
         _waveIn = new WaveInEvent
         {
-            // Capture at 16kHz, 16-bit, mono (matches expected input for VAD/STT)
             WaveFormat = new WaveFormat(rate: 16000, bits: 16, channels: 1)
         };
 
-        // Buffer size for ~20ms frames (matches VAD frame length)
         _waveIn.BufferMilliseconds = 20;
         _waveIn.DataAvailable += OnMicrophoneDataAvailable;
         _waveIn.StartRecording();
@@ -104,21 +143,59 @@ public class Program
     {
         if (_cts.IsCancellationRequested) return;
 
-        // Process the incoming audio chunk (16kHz PCM)
-        // No resampling needed if captured at 16kHz
-        // TODO: Integrate AEC (e.g., via WebRtcFilter) here to prevent self-detection of TTS output as input speech
-        _voiceAgentCore?.ProcessIncomingAudioChunk(e.Buffer);
+        byte[] capturedFrame = e.Buffer;  // 640 bytes (20ms at 16kHz 16-bit mono)
+
+        byte[] processedFrame = capturedFrame;  // Default to original if processing fails
+
+        try
+        {
+            // Ensure frame is exactly 640 bytes (pad with zeros if short, though WaveIn should provide exact)
+            if (capturedFrame.Length < 640)
+            {
+                byte[] paddedFrame = new byte[640];
+                Array.Copy(capturedFrame, paddedFrame, capturedFrame.Length);
+                capturedFrame = paddedFrame;  // Update for processing
+            }
+
+            // Write captured frame to filter (inputs for AEC/NS/AGC)
+            _webRtcFilter?.Write(capturedFrame);
+
+            // Prepare output buffer as short[320] (640 bytes == 320 samples)
+            short[] outputShorts = new short[320];
+            bool moreFrames;  // Out param (typically false for 1:1 processing, but check if API buffers)
+
+            if (_webRtcFilter?.Read(outputShorts, out moreFrames) == true)
+            {
+                // Convert short[] back to byte[] (zero-copy via MemoryMarshal)
+                processedFrame = MemoryMarshal.AsBytes(outputShorts.AsSpan()).ToArray();
+
+                // Handle if more frames are available (rare, but drain if needed)
+                if (moreFrames)
+                {
+                    Log.Warning("Additional frames available after Read; draining not implemented.");
+                    // Optionally loop Read until !moreFrames, but for real-time, log and proceed
+                }
+            }
+            else
+            {
+                Log.Debug("WebRtcFilter.Read returned false; using unprocessed frame.");
+            }
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "WebRtcFilter failed on captured frame; using unprocessed audio.");
+        }
+
+        _voiceAgentCore?.ProcessIncomingAudioChunk(processedFrame);
     }
 
     private static void SetupSpeaker()
     {
-        // Assume TTS outputs PCMU (8kHz, 8-bit, mono ulaw)
-        // Convert to PCM for playback
-        var playbackFormat = new WaveFormat(rate: 8000, bits: 16, channels: 1); // Standard PCM for WaveOut
+        var playbackFormat = new WaveFormat(rate: 16000, bits: 16, channels: 1);
 
         _bufferedWaveProvider = new BufferedWaveProvider(playbackFormat)
         {
-            DiscardOnBufferOverflow = true // Prevent backlog during interruptions
+            DiscardOnBufferOverflow = true
         };
 
         _waveOut = new WaveOutEvent();
@@ -128,33 +205,32 @@ public class Program
         Log.Information("Speaker playback started at {Format}.", playbackFormat);
     }
 
-    private static void OnAudioReplyReady(byte[] pcmuChunk)
+    private static void OnAudioReplyReady(byte[] pcmChunk)
     {
         if (_cts.IsCancellationRequested || _bufferedWaveProvider == null) return;
 
         try
         {
-            // Convert PCMU (ulaw) to linear PCM 16-bit for playback
-            var pcmChunk = AudioAlgos.ConvertPcmuToPcm16kHz(pcmuChunk); // Assumes method exists in AudioAlgos
-            var pcm8KhzChunk = AudioAlgos.ResamplePcmWithNAudio(pcmChunk, inputSampleRate: 16000, outputSampleRate: 8000);
-
-            _bufferedWaveProvider.AddSamples(pcm8KhzChunk, 0, pcm8KhzChunk.Length);
+            // Enqueue full chunk to pacer (it will split, pace, filter, and play)
+            _audioPacer!.EnqueueBufferForSendManual(pcmChunk);
         }
         catch (Exception ex)
         {
-            Log.Error(ex, "Failed to play TTS audio chunk.");
+            Log.Error(ex, "Failed to enqueue TTS audio chunk for playback.");
         }
     }
 
     private static async Task ShutdownAsync()
     {
-        _cts.Cancel();
+        await _cts.CancelAsync();
 
         _waveIn?.StopRecording();
         _waveIn?.Dispose();
 
         _waveOut?.Stop();
         _waveOut?.Dispose();
+
+        _audioPacer?.Dispose();
 
         if (_voiceAgentCore != null)
         {
