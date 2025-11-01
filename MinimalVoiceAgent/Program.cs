@@ -1,12 +1,12 @@
-﻿using AudioProcessingModuleCs;
-using AudioProcessingModuleCs.Media.Dsp.WebRtc;
-using MinimalSileroVAD.Core;
+﻿using AudioProcessingModuleCs.Media.Dsp.WebRtc;
 using NAudio.Wave;
 using Serilog;
 using Serilog.Events;
 using Serilog.Extensions.Logging;
-using System.Runtime.InteropServices;
 using System;
+using System.Buffers;
+using System.Runtime.InteropServices;
+using MinimalSileroVAD.Core;
 
 namespace MinimalVoiceAgent;
 
@@ -17,9 +17,10 @@ public class Program
     private static BufferedWaveProvider? _bufferedWaveProvider;
     private static VoiceAgentCore? _voiceAgentCore;
     private static CancellationTokenSource _cts = new();
-    private static WebRtcFilter? _webRtcFilter;
+    private static WebRtcFilter? _webRtcFilter = null;
     private static AudioProcessingConfig _audioConfig = AudioProcessingConfig.CreateDefault();
     private static AudioPacer? _audioPacer;  // New merged pacer
+    private static long _micFrameCount = 0; // Static counter for mic events (thread-safe via Interlocked)
 
     public static async Task Main(string[] args)
     {
@@ -38,14 +39,15 @@ public class Program
         var kernel = Algos.BuildKernel(lmConfig);
 
         // Initialize core components
+        var vad = new VadSpeechSegmenterSileroV5();
+        var tts = new TtsStreamer();
         var stt = new SttProviderStreaming();
         await stt.InitializeAsync(sttConfig.SttModelUrl);
         var llm = new LlmChat(lmConfig, computerToolFunctions, kernel);
-        var tts = new TtsStreamer();
         _audioPacer = new AudioPacer();
 
         _voiceAgentCore = new VoiceAgentCore(stt, llm, tts, _audioPacer);
-        await _voiceAgentCore.InitializeAsync(new VadSpeechSegmenterSileroV5());
+        await _voiceAgentCore.InitializeAsync(vad);
 
         // Hook up audio reply event to play TTS chunks (now PCM)
         _voiceAgentCore.OnAudioReplyReady += OnAudioReplyReady;
@@ -66,16 +68,12 @@ public class Program
             filterLength: _audioConfig.FilterLengthMs,
             recordedAudioFormat: recordedFormat,
             playedAudioFormat: playedFormat,
-            enableAec: _audioConfig.EnableEchoCancellation,
-            enableDenoise: _audioConfig.EnableNoiseSuppression,
-            enableAgc: _audioConfig.EnableAutomaticGainControl
+            enableAec: true,
+            enableDenoise: false,
+            enableAgc: false
         );
 
-        // Enable WebRTC in pacer if configured
-        if (_audioConfig.EnableEchoCancellation)
-        {
-            _audioPacer.EnableWebRtcProcessing(_webRtcFilter);
-        }
+        _audioPacer.EnableWebRtcProcessing(_webRtcFilter);
 
         // Setup microphone and speaker
         SetupMicrophone();
@@ -99,7 +97,8 @@ public class Program
 
     private static async Task PlayWelcomeMessageAsync(LanguageModelConfig lmConfig, TtsStreamer tts)
     {
-        if (_cts.IsCancellationRequested) return;
+        if (_cts.IsCancellationRequested)
+            return;
 
         var welcomeText = lmConfig.WelcomeMessage;
         if (string.IsNullOrWhiteSpace(welcomeText))
@@ -143,51 +142,95 @@ public class Program
     {
         if (_cts.IsCancellationRequested) return;
 
-        byte[] capturedFrame = e.Buffer;  // 640 bytes (20ms at 16kHz 16-bit mono)
+        // Force mono downmix if stereo (assume _waveIn.WaveFormat.Channels == 2)
+        byte[] capturedFrame;
+        Span<byte> capturedSpan = e.Buffer.AsSpan(); // Zero-copy view
 
-        byte[] processedFrame = capturedFrame;  // Default to original if processing fails
+        if (_waveIn.WaveFormat.Channels == 2)
+        {
+            capturedFrame = new byte[capturedSpan.Length / 2];
+            for (int i = 0; i < capturedFrame.Length / 2; i++) // Average L/R
+            {
+                short left = (short)((capturedSpan[i * 4 + 1] << 8) | capturedSpan[i * 4]);
+                short right = (short)((capturedSpan[i * 4 + 3] << 8) | capturedSpan[i * 4 + 2]);
+                short avg = (short)((left + right) / 2);
+                capturedFrame[i * 2] = (byte)(avg & 0xFF);
+                capturedFrame[i * 2 + 1] = (byte)((avg >> 8) & 0xFF);
+            }
+            Log.Debug("Downmixed stereo to mono (len {Len})", capturedFrame.Length);
+        }
+        else
+        {
+            capturedFrame = capturedSpan.ToArray();
+        }
 
         try
         {
-            // Ensure frame is exactly 640 bytes (pad with zeros if short, though WaveIn should provide exact)
+            // Ensure frame is exactly 640 bytes (pad with zeros if short)
             if (capturedFrame.Length < 640)
             {
                 byte[] paddedFrame = new byte[640];
                 Array.Copy(capturedFrame, paddedFrame, capturedFrame.Length);
-                capturedFrame = paddedFrame;  // Update for processing
+                capturedFrame = paddedFrame;
             }
 
             // Write captured frame to filter (inputs for AEC/NS/AGC)
             _webRtcFilter?.Write(capturedFrame);
 
-            // Prepare output buffer as short[320] (640 bytes == 320 samples)
-            short[] outputShorts = new short[320];
-            bool moreFrames;  // Out param (typically false for 1:1 processing, but check if API buffers)
-
-            if (_webRtcFilter?.Read(outputShorts, out moreFrames) == true)
+            // Rent short[] from pool (320 samples; modern: Shared pool for low-alloc)
+            short[] outputArray = ArrayPool<short>.Shared.Rent(320);
+            try
             {
-                // Convert short[] back to byte[] (zero-copy via MemoryMarshal)
-                processedFrame = MemoryMarshal.AsBytes(outputShorts.AsSpan()).ToArray();
+                Span<short> outputShorts = outputArray.AsSpan(0, 320); // Span view over rented array
 
-                // Handle if more frames are available (rare, but drain if needed)
-                if (moreFrames)
+                bool moreFrames = false; // Out param
+                if (_webRtcFilter?.Read(outputArray, out moreFrames) == true)  // Pass rented array
                 {
-                    Log.Warning("Additional frames available after Read; draining not implemented.");
-                    // Optionally loop Read until !moreFrames, but for real-time, log and proceed
+                    // Convert Span<short> to byte[] (zero-copy via MemoryMarshal)
+                    var frameBytes = MemoryMarshal.AsBytes(outputShorts[..320]).ToArray(); // Full frame
+
+                    // Feed to voice agent (process one frame at a time for real-time)
+                    _voiceAgentCore?.ProcessIncomingAudioChunk(frameBytes);
+
+                    if (moreFrames)
+                    {
+                        Log.Debug("WebRTC has additional buffered frames post-Read (consider draining if backlog grows).");
+                    }
+                }
+                else
+                {
+                    Log.Debug("WebRtcFilter.Read returned false; using unprocessed frame for this chunk.");
+                    _voiceAgentCore?.ProcessIncomingAudioChunk(capturedFrame);
                 }
             }
-            else
+            finally
             {
-                Log.Debug("WebRtcFilter.Read returned false; using unprocessed frame.");
+                // Return to pool (robust: Always, even on exception)
+                ArrayPool<short>.Shared.Return(outputArray, clearArray: true); // Clear for security/privacy (audio data)
             }
         }
         catch (Exception ex)
         {
-            Log.Error(ex, "WebRtcFilter failed on captured frame; using unprocessed audio.");
+            Log.Error(ex, "WebRtcFilter processing failed on captured frame; using unprocessed audio.");
+            _voiceAgentCore?.ProcessIncomingAudioChunk(capturedFrame); // Ensure forwarding
         }
-
-        _voiceAgentCore?.ProcessIncomingAudioChunk(processedFrame);
     }
+
+    
+
+    // Helper: Efficient RMS calc (inlined, no allocs beyond input)
+    //private static double CalculateRmsVolume(ReadOnlySpan<byte> buffer)
+    //{
+    //    if (buffer.Length == 0) return 0;
+
+    //    double sum = 0;
+    //    for (int i = 0; i < buffer.Length; i += 2) // 16-bit samples
+    //    {
+    //        short sample = (short)(buffer[i + 1] << 8 | buffer[i]);
+    //        sum += sample * sample;
+    //    }
+    //    return Math.Sqrt(sum / (buffer.Length / 2)); // RMS (0-32768 range)
+    //}
 
     private static void SetupSpeaker()
     {

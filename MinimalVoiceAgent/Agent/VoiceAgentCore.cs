@@ -20,6 +20,9 @@ public class VoiceAgentCore : IAsyncDisposable
 
     private bool _isDisposed;
 
+    /// <summary>
+    /// Buffer attaches to this, used for audio FROM TTS.
+    /// </summary>
     public event Action<byte[]>? OnAudioReplyReady;
 
     public VoiceAgentCore(
@@ -114,6 +117,10 @@ public class VoiceAgentCore : IAsyncDisposable
         return;
     }
 
+    /// <summary>
+    /// Audio received for internal processing (from cellphone/microphone, GotAudioRtp forwards audio to this.)
+    /// Audio is 16khz 16bit mono PCM.
+    /// </summary>
     public void ProcessIncomingAudioChunk(byte[] pcm16Khz)
     {
         if (_vad == null || _cancellationTokenSource?.IsCancellationRequested == true)

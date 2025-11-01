@@ -42,21 +42,63 @@ public record ToolSchema
         [property: JsonPropertyName("enum")] string[]? Enum = null);
 }
 
-public class LanguageModelConfig
+/// <summary>
+/// Immutable record for per-tool guidance. Supports priority for prompt ordering.
+/// </summary>
+public record ToolInstruction(
+    [property: JsonPropertyName("toolName")] string ToolName,
+    [property: JsonPropertyName("guidance")] string Guidance,
+    [property: JsonPropertyName("priority")] int Priority = 0);
+
+/// <summary>
+/// Enum for prompt section ordering. Extensible for future types.
+/// </summary>
+public enum SectionType
 {
-    [JsonPropertyName("ApiKeyEnvironmentVariable")] public string ApiKeyEnvironmentVariable { get; set; } = string.Empty;
-    [JsonPropertyName("Model")] public string Model { get; set; } = string.Empty;
-    [JsonPropertyName("EndPoint")] public string EndPoint { get; set; } = string.Empty;
-    [JsonPropertyName("MaxTokens")] public int MaxTokens { get; set; }
-    [JsonPropertyName("WelcomeMessage")] public string WelcomeMessage { get; set; } = string.Empty;
-    [JsonPropertyName("WelcomeFilePath")] public string WelcomeFilePath { get; set; } = "recordings/welcome_message.wav";
-    [JsonPropertyName("InstructionsText")] public string InstructionsText { get; set; } = string.Empty;
-    [JsonPropertyName("InstructionsAddendum")] public string InstructionsAddendum { get; set; } = string.Empty;
-    [JsonPropertyName("ToolGuidance")] public string ToolGuidance { get; set; } = string.Empty;
-    [JsonPropertyName("Temperature")] public float? Temperature { get; set; } = 0.7f;
-    [JsonPropertyName("Tools")] public List<ToolSchema> Tools { get; set; } = new();
+    Base = 0,
+    Addendum = 1,
+    Rules = 2,
+    Tools = 3  // Placeholder for tool-specific insertion
 }
 
+/// <summary>
+/// Immutable record for composable prompt sections.
+/// </summary>
+public record PromptSection(
+    [property: JsonPropertyName("type")] SectionType Type,
+    [property: JsonPropertyName("content")] string Content,
+    [property: JsonPropertyName("condition")] string? Condition = null);  // e.g., "tools_loaded"
+
+/// <summary>
+/// Immutable record for rules (extracted from ToolGuidance).
+/// </summary>
+public record Rule(
+    [property: JsonPropertyName("id")] string Id,
+    [property: JsonPropertyName("description")] string Description,
+    [property: JsonPropertyName("appliesTo")] string[] AppliesTo = null!);  // Default to global if empty
+
+/// <summary>
+/// Immutable record for LLM configuration. Loaded from JSON; supports modular prompt/rules.
+/// Legacy fields (InstructionsAddendum, ToolGuidance) deserialized but ignored.
+/// </summary>
+public record LanguageModelConfig(
+    [property: JsonPropertyName("ApiKeyEnvironmentVariable")] string ApiKeyEnvironmentVariable = "",
+    [property: JsonPropertyName("Model")] string Model = "",
+    [property: JsonPropertyName("EndPoint")] string EndPoint = "",
+    [property: JsonPropertyName("MaxTokens")] int MaxTokens = 0,
+    [property: JsonPropertyName("WelcomeMessage")] string WelcomeMessage = "",
+    [property: JsonPropertyName("WelcomeFilePath")] string WelcomeFilePath = "recordings/welcome_message.wav",
+    [property: JsonPropertyName("InstructionsText")] string InstructionsText = "",
+    [property: JsonPropertyName("Temperature")] float? Temperature = 0.1f,
+    [property: JsonPropertyName("Tools")] List<ToolSchema> Tools = default!,
+    [property: JsonPropertyName("ToolInstructions")] List<ToolInstruction>? ToolInstructions = default,
+    [property: JsonPropertyName("PromptSections")] List<PromptSection>? PromptSections = default,
+    [property: JsonPropertyName("Rules")] List<Rule>? Rules = default);
+
+
+/// <summary>
+/// A place to put free functions.
+/// </summary>
 public static partial class Algos
 {
     public static Kernel BuildKernel(LanguageModelConfig config)
@@ -92,8 +134,42 @@ public static partial class Algos
         var languageModel = JsonSerializer.Deserialize<LanguageModelConfig>(lmElement.GetRawText(), options)
             ?? throw new InvalidOperationException("Failed to deserialize LanguageModel configuration.");
 
+        // Validate PromptSections: Skip empties, dedupe by Type (keep last)
+        var sections = languageModel.PromptSections ?? new List<PromptSection>();
+        var invalids = sections.Where(s => string.IsNullOrWhiteSpace(s.Content)).ToList();
+        if (invalids.Any())
+        {
+            Log.Warning("Skipping {InvalidCount} empty PromptSections.", invalids.Count);
+            sections = sections.Except(invalids).ToList();
+        }
+        sections = sections.GroupBy(s => s.Type).Select(g => g.Last()).ToList();
+        languageModel = languageModel with { PromptSections = sections };
+
+        // Validate Rules: Skip invalids, dedupe by Id (keep first)
+        var rules = languageModel.Rules ?? new List<Rule>();
+        var ruleInvalids = rules.Where(r => string.IsNullOrWhiteSpace(r.Description)).ToList();
+        if (ruleInvalids.Any())
+        {
+            Log.Warning("Skipping {InvalidCount} invalid Rules.", ruleInvalids.Count);
+            rules = rules.Except(ruleInvalids).ToList();
+        }
+        rules = rules.GroupBy(r => r.Id).Select(g => g.First()).ToList();
+        languageModel = languageModel with { Rules = rules };
+
+        // Validate ToolInstructions: Skip empties
+        if (languageModel.ToolInstructions?.Any() == true)
+        {
+            var invalid = languageModel.ToolInstructions.Where(ti => string.IsNullOrWhiteSpace(ti.Guidance)).ToList();
+            if (invalid.Any())
+            {
+                Log.Warning("Skipping {InvalidCount} invalid ToolInstructions.", invalid.Count);
+                languageModel = languageModel with { ToolInstructions = languageModel.ToolInstructions.Except(invalid).ToList() };
+            }
+        }
+
         return languageModel;
     }
+
 }
 
 /// <summary>
@@ -212,7 +288,6 @@ public class LlmChat
     private static string BuildSystemPrompt(LanguageModelConfig config, ImmutableList<KernelFunctionMetadata> functionsMetadata)
     {
         var promptBuilder = new StringBuilder(config.InstructionsText ?? string.Empty);
-        promptBuilder.Append(config.InstructionsAddendum ?? string.Empty);
 
         // Enhance with loaded tool descriptions/params (immutable; detailed for better LLM guidance)
         if (functionsMetadata.Count > 0)
@@ -221,10 +296,8 @@ public class LlmChat
                 $"Tool '{f.PluginName ?? "default"}-{f.Name}': {f.Description}\nParameters:\n" +
                 string.Join("\n", f.Parameters.Select(p =>
                     $"- {p.Name} ({p.ParameterType?.Name ?? "string"}): {p.Description ?? "No description"} (required: {p.IsRequired}, default: {p.DefaultValue ?? "none"})"))));
-            config.ToolGuidance += $"\nAvailable tools:\n{toolDescriptions}\nUse tools when appropriate; respond naturally otherwise.";
         }
 
-        promptBuilder.Append(config.ToolGuidance);
         return promptBuilder.ToString();
     }
 
