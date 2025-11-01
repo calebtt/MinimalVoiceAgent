@@ -70,7 +70,7 @@ public class Program
             playedAudioFormat: playedFormat,
             enableAec: true,
             enableDenoise: false,
-            enableAgc: false
+            enableAgc: true
         );
 
         _audioPacer.EnableWebRtcProcessing(_webRtcFilter);
