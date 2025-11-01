@@ -135,6 +135,71 @@ public static class TtsProviderStreaming
     public const string DefaultVoiceKey = "af_heart"; // Natural American English
 
     /// <summary>
+    /// Pre-initializes the service for better first-call performance (SRP: Init only).
+    /// </summary>
+    public static async Task InitializeAsync(string? voiceKey = null, CancellationToken ct = default)
+    {
+        voiceKey ??= DefaultVoiceKey;
+        await Task.Run(() =>
+        {
+            _ = KokoroTTS.LoadModel();
+        }, ct).ConfigureAwait(false);
+
+        // Cache default voice (OCP: Lazy per-call, but init for perf)
+        if (!_voiceCache.ContainsKey(voiceKey))
+        {
+            var voice = KokoroVoiceManager.GetVoice(voiceKey) ?? throw new ArgumentException("Default voice not found.", nameof(voiceKey));
+            _voiceCache[voiceKey] = voice;
+        }
+    }
+
+    /// <summary>
+    /// Ensures initialized (internal async).
+    /// </summary>
+    private static async Task EnsureInitializedAsync(CancellationToken ct)
+    {
+        await _initLock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (_synthesizer is null)
+            {
+                ct.ThrowIfCancellationRequested();
+                _ = KokoroTTS.LoadModel(); // Existing
+
+                if (!File.Exists(_modelPath))
+                    throw new InvalidOperationException($"Kokoro model not found at {_modelPath}");
+
+                var sessionOptions = SessionOptions.MakeSessionOptionWithCudaProvider(0); // deviceId=0 for primary GPU
+                //var sessionOptions = SessionOptions.MakeSessionOptionWithTensorrtProvider(0); // deviceId=0 for primary GPU
+                sessionOptions.GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL; // Modern: Full opts for perf
+                sessionOptions.EnableMemoryPattern = true; // Reduce VRAM allocs
+                sessionOptions.ExecutionMode = ExecutionMode.ORT_SEQUENTIAL; // Stable for TTS
+                sessionOptions.IntraOpNumThreads = Environment.ProcessorCount; // Max CPU threads for non-GPU ops
+                sessionOptions.InterOpNumThreads = 1; // Single thread for inter-op to reduce context switching
+
+                //sessionOptions.AppendExecutionProvider_CUDA(); // Ensure CUDA provider appended
+                Log.Information("Attempting to initialize Kokoro with GPU acceleration...");
+                try
+                {
+                    // Assuming KokoroWavSynthesizer accepts SessionOptions (check/fork source if not)
+                    _synthesizer = new KokoroWavSynthesizer(_modelPath, sessionOptions);
+                }
+                catch (OnnxRuntimeException ex) when (ex.Message.Contains("CUDA") || ex.Message.Contains("cuDNN"))
+                {
+                    Log.Error(ex, "GPU init failed - falling back to CPU. Check CUDA/cuDNN versions and PATH.");
+                    // Fallback: Create CPU session
+                    var cpuOptions = new SessionOptions();
+                    _synthesizer = new KokoroWavSynthesizer(_modelPath, cpuOptions);
+                }
+            }
+        }
+        finally
+        {
+            _initLock.Release();
+        }
+    }
+
+    /// <summary>
     /// Synthesizes text to audio asynchronously, returning a seekable MemoryStream (non-streaming, full utterance).
     /// </summary>
     public static async Task<MemoryStream> TextToSpeechAsync(
@@ -343,76 +408,11 @@ public static class TtsProviderStreaming
     }
 
     /// <summary>
-    /// Pre-initializes the service for better first-call performance (SRP: Init only).
-    /// </summary>
-    public static async Task InitializeAsync(string? voiceKey = null, CancellationToken ct = default)
-    {
-        voiceKey ??= DefaultVoiceKey;
-        await Task.Run(() =>
-        {
-            _ = KokoroTTS.LoadModel();
-        }, ct).ConfigureAwait(false);
-
-        // Cache default voice (OCP: Lazy per-call, but init for perf)
-        if (!_voiceCache.ContainsKey(voiceKey))
-        {
-            var voice = KokoroVoiceManager.GetVoice(voiceKey) ?? throw new ArgumentException("Default voice not found.", nameof(voiceKey));
-            _voiceCache[voiceKey] = voice;
-        }
-    }
-
-    /// <summary>
     /// Lists available voice keys synchronously for American English (SRP: Query only).
     /// </summary>
     public static IReadOnlyList<string> ListVoices()
     {
         return KokoroVoiceManager.GetVoices(KokoroLanguage.AmericanEnglish).Select(v => v.Name).ToList();
-    }
-
-    /// <summary>
-    /// Ensures initialized (internal async).
-    /// </summary>
-    private static async Task EnsureInitializedAsync(CancellationToken ct)
-    {
-        await _initLock.WaitAsync(ct).ConfigureAwait(false);
-        try
-        {
-            if (_synthesizer is null)
-            {
-                ct.ThrowIfCancellationRequested();
-                _ = KokoroTTS.LoadModel(); // Existing
-
-                if (!File.Exists(_modelPath))
-                    throw new InvalidOperationException($"Kokoro model not found at {_modelPath}");
-
-                var sessionOptions = SessionOptions.MakeSessionOptionWithCudaProvider(0); // deviceId=0 for primary GPU
-                //var sessionOptions = SessionOptions.MakeSessionOptionWithTensorrtProvider(0); // deviceId=0 for primary GPU
-                sessionOptions.GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL; // Modern: Full opts for perf
-                sessionOptions.EnableMemoryPattern = true; // Reduce VRAM allocs
-                sessionOptions.ExecutionMode = ExecutionMode.ORT_SEQUENTIAL; // Stable for TTS
-                sessionOptions.IntraOpNumThreads = Environment.ProcessorCount; // Max CPU threads for non-GPU ops
-                sessionOptions.InterOpNumThreads = 1; // Single thread for inter-op to reduce context switching
-
-                //sessionOptions.AppendExecutionProvider_CUDA(); // Ensure CUDA provider appended
-                Log.Information("Attempting to initialize Kokoro with GPU acceleration...");
-                try
-                {
-                    // Assuming KokoroWavSynthesizer accepts SessionOptions (check/fork source if not)
-                    _synthesizer = new KokoroWavSynthesizer(_modelPath, sessionOptions);
-                }
-                catch (OnnxRuntimeException ex) when (ex.Message.Contains("CUDA") || ex.Message.Contains("cuDNN"))
-                {
-                    Log.Error(ex, "GPU init failed - falling back to CPU. Check CUDA/cuDNN versions and PATH.");
-                    // Fallback: Create CPU session
-                    var cpuOptions = new SessionOptions();
-                    _synthesizer = new KokoroWavSynthesizer(_modelPath, cpuOptions);
-                }
-            }
-        }
-        finally
-        {
-            _initLock.Release();
-        }
     }
 
     /// <summary>

@@ -39,12 +39,12 @@ public class Program
         var kernel = Algos.BuildKernel(lmConfig);
 
         // Initialize core components
+        _audioPacer = new AudioPacer();
         var vad = new VadSpeechSegmenterSileroV5();
         var tts = new TtsStreamer();
         var stt = new SttProviderStreaming();
         await stt.InitializeAsync(sttConfig.SttModelUrl);
         var llm = new LlmChat(lmConfig, computerToolFunctions, kernel);
-        _audioPacer = new AudioPacer();
 
         _voiceAgentCore = new VoiceAgentCore(stt, llm, tts, _audioPacer);
         await _voiceAgentCore.InitializeAsync(vad);
@@ -73,8 +73,6 @@ public class Program
             enableAgc: true
         );
 
-        _audioPacer.EnableWebRtcProcessing(_webRtcFilter);
-
         // Setup microphone and speaker
         SetupMicrophone();
         SetupSpeaker();
@@ -84,6 +82,8 @@ public class Program
         {
             _bufferedWaveProvider?.AddSamples(pcmFrame, 0, pcmFrame.Length);
         });
+
+        _audioPacer.EnableWebRtcProcessing(_webRtcFilter);
 
         // Play welcome message
         await PlayWelcomeMessageAsync(lmConfig, tts);
@@ -157,7 +157,7 @@ public class Program
                 capturedFrame[i * 2] = (byte)(avg & 0xFF);
                 capturedFrame[i * 2 + 1] = (byte)((avg >> 8) & 0xFF);
             }
-            Log.Debug("Downmixed stereo to mono (len {Len})", capturedFrame.Length);
+            //Log.Debug("Downmixed stereo to mono (len {Len})", capturedFrame.Length);
         }
         else
         {
