@@ -19,8 +19,7 @@ public class Program
     private static CancellationTokenSource _cts = new();
     private static WebRtcFilter? _webRtcFilter = null;
     private static AudioProcessingConfig _audioConfig = AudioProcessingConfig.CreateDefault();
-    private static AudioPacer? _audioPacer;  // New merged pacer
-    private static long _micFrameCount = 0; // Static counter for mic events (thread-safe via Interlocked)
+    private static AudioPacer? _audioPacer;
 
     public static async Task Main(string[] args)
     {
@@ -46,7 +45,7 @@ public class Program
         await stt.InitializeAsync(sttConfig.SttModelUrl);
         var llm = new LlmChat(lmConfig, computerToolFunctions, kernel);
 
-        _voiceAgentCore = new VoiceAgentCore(stt, llm, tts, _audioPacer);
+        _voiceAgentCore = new VoiceAgentCore(stt, llm, tts, _audioPacer, doUseInterruption: false);
         await _voiceAgentCore.InitializeAsync(vad);
 
         // Hook up audio reply event to play TTS chunks (now PCM)
@@ -68,9 +67,9 @@ public class Program
             filterLength: _audioConfig.FilterLengthMs,
             recordedAudioFormat: recordedFormat,
             playedAudioFormat: playedFormat,
-            enableAec: true,
-            enableDenoise: false,
-            enableAgc: true
+            enableAec: _audioConfig.EnableEchoCancellation,
+            enableDenoise: _audioConfig.EnableNoiseSuppression,
+            enableAgc: _audioConfig.EnableAutomaticGainControl
         );
 
         // Setup microphone and speaker

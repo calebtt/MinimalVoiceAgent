@@ -17,6 +17,8 @@ public class VoiceAgentCore : IAsyncDisposable
 
     private readonly object _processingLock = new();
     private bool _isProcessingTranscription;
+    private bool _doUseInterruption;
+    private bool _ignoreCurrentSegment;
 
     private bool _isDisposed;
 
@@ -29,7 +31,8 @@ public class VoiceAgentCore : IAsyncDisposable
         SttProviderStreaming streamingSttClient,
         LlmChat llmChat,
         TtsStreamer ttsStreamer,
-        AudioPacer audioPacer)
+        AudioPacer audioPacer,
+        bool doUseInterruption = true)
     {
         _streamingSttClient = streamingSttClient ?? throw new ArgumentNullException(nameof(streamingSttClient));
         _llmChat = llmChat ?? throw new ArgumentNullException(nameof(llmChat));
@@ -40,6 +43,7 @@ public class VoiceAgentCore : IAsyncDisposable
         _streamingSttClient.TranscriptionComplete += OnTranscriptionComplete;
 
         Log.Information("VoiceAgentCore created.");
+        _doUseInterruption = doUseInterruption;
     }
 
     public bool IsProcessingTranscription => _isProcessingTranscription;
@@ -58,12 +62,22 @@ public class VoiceAgentCore : IAsyncDisposable
             {
                 Log.Information("VAD: Speech segment started.");
 
-                if (_audioPacer.IsAudioPlaying && !volumeFilterActive)
-                {
-                    Log.Information("VAD: Applying volume filter during potential interrupt activation.");
+                _ignoreCurrentSegment = false;  // Reset the ignore segment flag at start
+                volumeFilterActive = false;
 
-                    _audioPacer.ApplyFilter(chunk => AudioAlgos.AdjustPcmVolume(chunk, VolumeLoweringFactor));
-                    volumeFilterActive = true;
+                if (_audioPacer.IsAudioPlaying)
+                {
+                    if (_doUseInterruption)
+                    {
+                        Log.Information("VAD: Applying volume filter for interruption.");
+                        _audioPacer.ApplyFilter(chunk => AudioAlgos.AdjustPcmVolume(chunk, VolumeLoweringFactor));
+                        volumeFilterActive = true;
+                    }
+                    else
+                    {
+                        _ignoreCurrentSegment = true;  // Flag to ignore this segment (potential echo)
+                        Log.Information("VAD: Flagged segment for ignore (started during playback, interruption disabled).");
+                    }
                 }
             };
 
@@ -79,6 +93,14 @@ public class VoiceAgentCore : IAsyncDisposable
                     _audioPacer.ClearFilter();
                     volumeFilterActive = false;
                     Log.Information("VAD: Volume filter cleared after speech segment.");
+                }
+
+                // Ignore if flagged (skips STT processing)
+                if (!_doUseInterruption && _ignoreCurrentSegment)
+                {
+                    _ignoreCurrentSegment = false;
+                    Log.Information("VAD: Ignored speech segment that started during playback (interruption disabled).");
+                    return;
                 }
 
                 _streamingSttClient.ProcessAudioChunkAsync(pcmStream).Wait();
@@ -131,6 +153,7 @@ public class VoiceAgentCore : IAsyncDisposable
 
     public void InterruptPlayback()
     {
+        // If _doUseInterruption is false, this should not be called.
         if (_audioPacer.IsAudioPlaying)
         {
             Log.Information("VoiceAgentCore: Interrupting current TTS playback.");
@@ -143,6 +166,13 @@ public class VoiceAgentCore : IAsyncDisposable
     /// </summary>
     private void OnTranscriptionComplete(object? sender, string transcription)
     {
+        if (!_doUseInterruption && _audioPacer.IsAudioPlaying)
+        {
+            // Ignore new transcription if not using interruption and TTS is playing
+            Log.Information("VoiceAgentCore: Ignoring transcription due to ongoing TTS playback (interruption disabled).");
+            return;
+        }
+
         Log.Information($"VoiceAgentCore: STT Complete transcription: '{transcription}'");
 
         bool shouldProcess;
@@ -189,7 +219,10 @@ public class VoiceAgentCore : IAsyncDisposable
                 return;
 
             // Interrupt if playing
-            InterruptPlayback();
+            if (_doUseInterruption)
+            {
+                InterruptPlayback();
+            }
 
             // Start streaming TTS (voiceKey null by default)
             await _ttsStreamer.StartStreamingAsync(response, ct: _cancellationTokenSource?.Token ?? CancellationToken.None);
