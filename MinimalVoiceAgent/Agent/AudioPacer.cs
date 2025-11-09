@@ -1,5 +1,6 @@
-﻿using AudioProcessingModuleCs.Media.Dsp.WebRtc;
-using Serilog;
+﻿using Serilog;
+using SoundFlow.Extensions.WebRtc.Apm;
+using SoundFlow.Extensions.WebRtc.Apm.Modifiers;
 using System.Collections.Concurrent;
 using System.Diagnostics;
 
@@ -113,7 +114,7 @@ public class AudioPacer : IDisposable
                     frame = _silenceFrame;
                 }
 
-                var frameToPlay = frame.AsSpan().ToArray();  // Copy for safety
+                Span<byte> frameSpan = frame.AsSpan();
 
                 // Apply filter if active
                 var filter = _currentFilter;
@@ -121,7 +122,8 @@ public class AudioPacer : IDisposable
                 {
                     try
                     {
-                        frameToPlay = filter(frameToPlay);
+                        frame = filter(frame);  // Update frame (may realloc if needed)
+                        frameSpan = frame.AsSpan();
                     }
                     catch (Exception ex)
                     {
@@ -129,10 +131,10 @@ public class AudioPacer : IDisposable
                     }
                 }
 
-                _playAction(frameToPlay);
+                _playAction(frame);
 
                 // Detect completion
-                if (_hasAudioPending && _queue.IsEmpty && !frame.AsSpan().SequenceEqual(_silenceFrame))
+                if (_hasAudioPending && _queue.IsEmpty && !frameSpan.SequenceEqual(_silenceFrame))
                 {
                     _hasAudioPending = false;
                     SendingComplete?.Invoke();
@@ -155,55 +157,22 @@ public class AudioPacer : IDisposable
         }
     }
 
-    public void EnqueueBufferForSendManual(byte[] pcmBytes)
+    public void EnqueueBufferForSendManual(byte[] pcmChunk)
     {
-        if (pcmBytes == null || pcmBytes.Length == 0 || _pacerTask == null)
-            return;
+        if (pcmChunk == null || pcmChunk.Length == 0 || _pacerTask == null) return;
 
-        var offset = 0;
-        while (offset + FrameSizeBytes <= pcmBytes.Length)
+        int offset = 0;
+        while (offset + FrameSizeBytes <= pcmChunk.Length)
         {
-            var frame = new byte[FrameSizeBytes];
-            Array.Copy(pcmBytes, offset, frame, 0, FrameSizeBytes);
-            _hasAudioPending = true;  // Mark pending for real audio
+            byte[] frame = new byte[FrameSizeBytes];
+            Array.Copy(pcmChunk, offset, frame, 0, FrameSizeBytes);
+            _hasAudioPending = true;
             _queue.Enqueue(frame);
             offset += FrameSizeBytes;
         }
 
-        if (offset < pcmBytes.Length)
-        {
-            var remaining = pcmBytes.Length - offset;
-            Log.Debug($"Discarded {remaining} PCM bytes (incomplete frame).");
-        }
-    }
-
-    public void EnableWebRtcProcessing(WebRtcFilter webRtcFilter)
-    {
-        ApplyFilter(pcmFrame =>
-        {
-            try
-            {
-                // Ensure frame is exactly 640 bytes (pad if needed, though Enqueue should ensure)
-                if (pcmFrame.Length < FrameSizeBytes)
-                {
-                    byte[] paddedFrame = new byte[FrameSizeBytes];
-                    Array.Copy(pcmFrame, paddedFrame, pcmFrame.Length);
-                    pcmFrame = paddedFrame;
-                }
-
-                // Register this frame as played for AEC reference
-                webRtcFilter.RegisterFramePlayed(pcmFrame);
-
-                return pcmFrame;  // Return original (or padded); API doesn't modify played frames
-            }
-            catch (Exception ex)
-            {
-                Log.Error(ex, "WebRtc processing failed on played frame; skipping.");
-                return pcmFrame;  // Fallback
-            }
-        });
-
-        Log.Information("Enabled WebRtc processing in AudioPacer filter chain.");
+        if (offset < pcmChunk.Length)
+            Log.Debug("Discarded {Remaining} incomplete PCM bytes.", pcmChunk.Length - offset);
     }
 
     public void Dispose()

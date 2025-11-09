@@ -141,7 +141,7 @@ public class VoiceAgentCore : IAsyncDisposable
 
     /// <summary>
     /// Audio received for internal processing (from cellphone/microphone, GotAudioRtp forwards audio to this.)
-    /// Audio is 16khz 16bit mono PCM.
+    /// Audio is 16khz 16bit mono PCM. 20ms frames.
     /// </summary>
     public void ProcessIncomingAudioChunk(byte[] pcm16Khz)
     {
