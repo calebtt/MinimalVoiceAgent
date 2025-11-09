@@ -4,25 +4,89 @@
     "Model": "grok-4-fast-non-reasoning",
     "EndPoint": "https://api.x.ai/v1",
     "MaxTokens": 300,
-    "WelcomeMessage": "Hello! This is the local voice assistant for Caleb's nerdy computer setup. How can I assist with your tech tasks today?",
+    "WelcomeMessage": "Hello! This is the local voice assistant for Caleb's computer setup. How can I assist with your tech tasks today?",
     "WelcomeFilePath": "recordings/welcome_message.wav",
-    "InstructionsText": "You are a professional local voice assistant for Caleb's computer in Tennessee. Handle voice commands for system control, info, and productivity. Keep responses concise—1-3 sentences max. Confirm actions: \"Done, [summary].\" For complex requests, use tools or suggest alternatives. End interactions: \"All set—let me know if you need more!\"",
-    "InstructionsAddendum": "\n\nLocal Actions: Use adjust_system_volume for mute/volume (e.g., while watching TV), get_system_info for hardware checks, set_timer for builds/reminders, perform_calculation for math/code, get_current_datetime for time, set_local_reminder for notes. Logs: Use send_notification for persistent notes.",
-    "ToolGuidance": "\n\nAvailable tools: Use 'adjust_system_volume' to mute (level=-1) or set volume (0-100)—e.g., 'mute TV' → level=-1. Use 'get_system_info' for CPU/memory ('cpu', 'memory', 'all'). Use 'set_timer' for durations (seconds, message). Use 'perform_calculation' for expressions. Use 'get_current_datetime' for time (timeZoneId). Use 'set_local_reminder' for future notes (message, dueTime). Use 'send_notification' to log issues/notes (issue, urgency). Use 'end_conversation' after actions (reason). Use 'schedule_followup' for external. MANDATORY RULES:\n1. SYSTEM FIRST: For volume/mute/hardware/timer, invoke relevant tool immediately—e.g., 'lower volume' → adjust_system_volume level=50.\n2. NOTES: Invoke send_notification for logs.\n3. END: After actions, invoke end_conversation.\n4. OTHER: Respond if no tool; tool then 1-2 sentences.",
+    "InstructionsText": "You are a professional local voice assistant for Caleb's computer in Tennessee. Handle voice commands for system control, info, and productivity. Keep responses concise—1-3 sentences max. Confirm actions: \"Done, [summary].\" For complex requests, use tools or suggest alternatives. End interactions naturally: \"All set—let me know if you need more!\"",
     "Temperature": 0.1,
-    "tools": [
+    "Tools": [
       {
-        "name": "adjust_system_volume",
-        "description": "Adjust the system volume, e.g., mute while watching TV or lower for a call.",
+        "name": "get_current_datetime",
+        "description": "Retrieve the current local date and time, useful for scheduling or time-based queries.",
         "parameters": {
           "type": "object",
           "properties": {
-            "level": {
-              "type": "integer",
-              "description": "Volume level (0-100; negative for mute)",
+            "timeZoneId": {
+              "type": "string",
+              "description": "Time zone ID (default: local system time zone)",
+              "required": false,
+              "default": null
+            }
+          }
+        }
+      },
+      {
+        "name": "perform_calculation",
+        "description": "Perform a simple mathematical calculation, e.g., for quick arithmetic or code snippets.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "expression": {
+              "type": "string",
+              "description": "Mathematical expression (e.g., '2 + 3 * 4')",
               "required": true
             }
           }
+        }
+      },
+      {
+        "name": "set_local_reminder",
+        "description": "Set a simple in-memory reminder (persists only during runtime; e.g., 'buy new GPU next week').",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "message": {
+              "type": "string",
+              "description": "Reminder message",
+              "required": true
+            },
+            "dueTime": {
+              "type": "string",
+              "description": "Due time offset from now (e.g., 'in 30 minutes', 'tomorrow at 9AM')",
+              "required": true
+            }
+          }
+        }
+      },
+      {
+        "name": "lower_volume",
+        "description": "Lower the system volume by a fixed step (10%). Supported on Windows only.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "raise_volume",
+        "description": "Raise the system volume by a fixed step (10%). Supported on Windows only.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "mute_volume",
+        "description": "Mute the system volume (sets mute to true). Supported on Windows only.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "get_system_volume",
+        "description": "Retrieve the current system volume level (0-100) and mute status. Supported on Windows only.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
         }
       },
       {
@@ -61,54 +125,6 @@
         }
       },
       {
-        "name": "perform_calculation",
-        "description": "Perform a simple mathematical calculation, e.g., for quick arithmetic or code snippets.",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "expression": {
-              "type": "string",
-              "description": "Mathematical expression (e.g., '2 + 3 * 4')",
-              "required": true
-            }
-          }
-        }
-      },
-      {
-        "name": "get_current_datetime",
-        "description": "Retrieve the current local date and time, useful for scheduling or time-based queries.",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "timeZoneId": {
-              "type": "string",
-              "description": "Time zone ID (default: local system time zone)",
-              "required": false,
-              "default": null
-            }
-          }
-        }
-      },
-      {
-        "name": "set_local_reminder",
-        "description": "Set a simple in-memory reminder (persists only during runtime; e.g., 'buy new GPU next week').",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "message": {
-              "type": "string",
-              "description": "Reminder message",
-              "required": true
-            },
-            "dueTime": {
-              "type": "string",
-              "description": "Due time offset from now (e.g., 'in 30 minutes', 'tomorrow at 9AM')",
-              "required": true
-            }
-          }
-        }
-      },
-      {
         "name": "send_notification",
         "description": "Log a message or issue for follow-up (treat 'message' as issue for general interactions).",
         "parameters": {
@@ -142,46 +158,183 @@
         }
       },
       {
-        "name": "end_conversation",
-        "description": "Gracefully end the interaction after action or resolution.",
+        "name": "launch_application",
+        "description": "Launch a desktop application by executable path, AppID, or partial name. Uses Windows Start menu search for fuzzy matching; returns candidates if topN > 1 for LLM selection.",
         "parameters": {
           "type": "object",
           "properties": {
-            "reason": {
+            "appPathOrName": {
               "type": "string",
-              "description": "Reason (e.g., 'task completed', 'resolved')",
+              "description": "Path, AppID, or friendly name (e.g., 'notepad', 'Microsoft.WindowsCalculator_8wekyb3d8bbwe!App')",
+              "required": true
+            },
+            "arguments": {
+              "type": "string",
+              "description": "Optional command-line args (e.g., '--new-window')",
               "required": false,
               "default": ""
+            },
+            "topN": {
+              "type": "integer",
+              "description": "Top N search results to return (default 1: launch top; >1: return list without launching)",
+              "required": false,
+              "default": 1
             }
           }
         }
       },
       {
-        "name": "schedule_followup",
-        "description": "Schedule a follow-up if mentioned (e.g., callback).",
+        "name": "open_file",
+        "description": "Open a file or folder using the default system handler (e.g., for PDFs, images).",
         "parameters": {
           "type": "object",
           "properties": {
-            "service_type": {
+            "filePath": {
               "type": "string",
-              "description": "Type (default 'callback')",
-              "required": false,
-              "default": "callback"
-            },
-            "location": {
-              "type": "string",
-              "description": "Context or location (optional)",
-              "required": false,
-              "default": ""
-            },
-            "preferred_time": {
-              "type": "string",
-              "description": "Preferred time (e.g., 'tomorrow')",
-              "required": false,
-              "default": ""
+              "description": "Full path to file or folder",
+              "required": true
             }
           }
         }
+      },
+      {
+        "name": "search_local_files",
+        "description": "Search for files in a directory by pattern (e.g., '*.txt' in 'Documents'). Returns top matches.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "directory": {
+              "type": "string",
+              "description": "Root directory (default: user Documents)",
+              "required": false,
+              "default": "%USERPROFILE%\\Documents"
+            },
+            "pattern": {
+              "type": "string",
+              "description": "File pattern (e.g., '*.py', 'report.*')",
+              "required": true
+            },
+            "maxResults": {
+              "type": "integer",
+              "description": "Max files to return",
+              "required": false,
+              "default": 10
+            }
+          }
+        }
+      },
+      {
+        "name": "skip_youtube_ad",
+        "description": "Detect and skip YouTube ads intelligently: Captures screenshots, uses local LLaVA model via Python to generate descriptions, checks for 'Skip Ad' button presence/clickability, simulates click, verifies success.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "maxPollSeconds": {
+              "type": "integer",
+              "description": "Max wait time for button (default 30s)",
+              "required": false,
+              "default": 30
+            },
+            "pollIntervalSeconds": {
+              "type": "integer",
+              "description": "Screenshot interval (default 2s)",
+              "required": false,
+              "default": 2
+            }
+          }
+        }
+      },
+      {
+        "name": "lock_screen",
+        "description": "Lock the Windows screen immediately (user session).",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      }
+    ],
+    "ToolInstructions": [
+      {
+        "toolName": "lower_volume",
+        "guidance": "Invoke immediately on 'lower volume' or similar. Confirm: 'Volume lowered by 10%. Done.'",
+        "priority": 1
+      },
+      {
+        "toolName": "raise_volume",
+        "guidance": "Invoke on 'raise volume' or 'turn up'. Confirm: 'Volume raised by 10%. All set.'",
+        "priority": 1
+      },
+      {
+        "toolName": "mute_volume",
+        "guidance": "Invoke on 'mute' or 'silence'. Toggle if already muted; confirm: 'Muted—shh!'",
+        "priority": 1
+      },
+      {
+        "toolName": "get_system_volume",
+        "guidance": "Use for 'what's the volume?' queries. Respond with level/mute status, e.g., 'Volume at 70%, not muted.'",
+        "priority": 2
+      },
+      {
+        "toolName": "perform_calculation",
+        "guidance": "For math/code: Parse expression safely (e.g., 'calculate 2+3'). Output result + brief explanation.",
+        "priority": 3
+      },
+      {
+        "toolName": "send_notification",
+        "guidance": "Log non-urgent notes/issues. Set urgency: 'low' for reminders, 'high' for errors. Include caller_name if known.",
+        "priority": 4
+      },
+      {
+        "toolName": "launch_application",
+        "guidance": "Invoke on 'open [app]' (e.g., 'open Notepad'). If ambiguous, use topN=3 to get candidates, then re-call with selected AppID. Confirm: 'Launching [app]—ready.' Log if fails.",
+        "priority": 1
+      },
+      {
+        "toolName": "skip_youtube_ad",
+        "guidance": "Invoke on 'skip ad' or 'skip YouTube ad'. Poll until clickable, click, verify (no ad post-click). Confirm success/fail via notification.",
+        "priority": 2
+      },
+      {
+        "toolName": "lock_screen",
+        "guidance": "Invoke on 'lock screen'. Immediate action; confirm: 'Screen locked.'",
+        "priority": 3
+      },
+      {
+        "toolName": "open_file",
+        "guidance": "Invoke on 'open [file]'. Validate path first; confirm: 'Opened [file].'",
+        "priority": 2
+      },
+      {
+        "toolName": "search_local_files",
+        "guidance": "Invoke on 'find [pattern]'. Return top results; log full list if many.",
+        "priority": 3
+      }
+    ],
+    "Rules": [
+      {
+        "id": "system-first",
+        "description": "SYSTEM FIRST: For volume/mute, invoke relevant tool immediately—e.g., 'lower volume' → lower_volume.",
+        "appliesTo": [ "lower_volume", "raise_volume", "mute_volume", "get_system_volume" ]
+      },
+      {
+        "id": "notes-logging",
+        "description": "NOTES: Invoke send_notification for logs (e.g., reminders, errors). Set urgency appropriately.",
+        "appliesTo": [ "send_notification" ]
+      },
+      {
+        "id": "no-tool-fallback",
+        "description": "OTHER: If no tool matches, respond naturally in 1-2 sentences; suggest alternatives.",
+        "appliesTo": [ "global" ]
+      },
+      {
+        "id": "media-automation",
+        "description": "MEDIA: For YouTube/media, invoke skip_youtube_ad proactively if ad detected; combine with volume tools.",
+        "appliesTo": [ "skip_youtube_ad", "lower_volume" ]
+      },
+      {
+        "id": "file-safety",
+        "description": "FILES: Validate paths before open/search to avoid errors; use send_notification for results lists.",
+        "appliesTo": [ "open_file", "search_local_files" ]
       }
     ]
   }

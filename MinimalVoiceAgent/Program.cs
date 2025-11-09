@@ -1,64 +1,51 @@
-﻿using NAudio.Wave;
+﻿using MinimalSileroVAD.Core;
 using Serilog;
 using Serilog.Events;
 using Serilog.Extensions.Logging;
-using MinimalSileroVAD.Core;
+using SoundFlow.Abstracts.Devices;  // For AudioDevice, AudioCaptureDevice
+using SoundFlow.Backends.MiniAudio;  // For MiniAudioEngine
+using SoundFlow.Components;
+using SoundFlow.Enums;  // For SampleFormat
+using SoundFlow.Extensions.WebRtc.Apm.Modifiers;  // For WebRtcApmModifier
+using SoundFlow.Interfaces;
+using SoundFlow.Structs;  // For AudioFormat
+using System.Collections.Concurrent;
 
 namespace MinimalVoiceAgent;
 
-public class Program
+public static partial class Algos
 {
-    private static WaveInEvent? _waveIn;
-    private static WaveOutEvent? _waveOut;
-    private static BufferedWaveProvider? _bufferedWaveProvider;
-    private static VoiceAgentCore? _voiceAgentCore;
-    private static CancellationTokenSource _cts = new();
-
-    public static async Task Main(string[] args)
+    public static float[] ConvertPcmToFloat(ReadOnlySpan<byte> pcmBytes)
     {
-        AddConsoleLogger();
-
-        var lmConfig = await Algos.LoadLanguageModelConfigAsync("profiles/personal.json");
-        var sttConfig = await Algos.LoadSttSettingsAsync("sttsettings.json");
-
-        // Initialize TTS provider (assumes global/static init as in original)
-        await TtsProviderStreaming.InitializeAsync();
-
-        // Stub tool functions since no SIP (hangup and transfer do nothing)
-        var computerToolFunctions = new ComputerToolFunctions();
-
-        // Build Semantic Kernel
-        var kernel = Algos.BuildKernel(lmConfig);
-
-        // Initialize core components
-        var stt = new SttProviderStreaming(sttConfig.SttModelUrl);
-        var llm = new LlmChat(lmConfig, computerToolFunctions, kernel);
-        var tts = new TtsStreamer(); // Assumes TtsStreamer is defined; handles streaming TTS
-        var audioPacer = new RtpAudioPacer(); // Assumes RtpAudioPacer is defined; for buffering/playing TTS
-
-        _voiceAgentCore = new VoiceAgentCore(stt, llm, tts, audioPacer);
-        await _voiceAgentCore.InitializeAsync(new VadSpeechSegmenterSileroV5());
-
-        // Hook up audio reply event to play TTS chunks
-        _voiceAgentCore.OnAudioReplyReady += OnAudioReplyReady;
-
-        // Setup microphone and speaker
-        SetupMicrophone();
-        SetupSpeaker();
-
-        // Play welcome message immediately after init
-        await PlayWelcomeMessageAsync(lmConfig, tts);
-
-        Log.Information("Minimal Voice Agent started. Speak into the microphone. Press any key to exit.");
-
-        Console.ReadKey();
-
-        await ShutdownAsync();
+        if (pcmBytes.Length % 2 != 0) throw new ArgumentException("PCM must be 16-bit aligned.", nameof(pcmBytes));
+        int numSamples = pcmBytes.Length / 2;
+        var floatSamples = new float[numSamples];
+        for (int i = 0; i < numSamples; i++)
+        {
+            short sample = BitConverter.ToInt16(pcmBytes.Slice(i * 2, 2));
+            floatSamples[i] = Math.Clamp(sample / 32767f, -1f, 1f);  // Signed 16-bit normalize with headroom
+        }
+        return floatSamples;
     }
 
-    private static async Task PlayWelcomeMessageAsync(LanguageModelConfig lmConfig, TtsStreamer tts)
+    public static byte[] ConvertFloatToPcm(ReadOnlySpan<float> floatSamples)
     {
-        if (_cts.IsCancellationRequested) return;
+        int numSamples = floatSamples.Length;
+        var pcmBytes = new byte[numSamples * 2];
+        Span<byte> byteSpan = pcmBytes.AsSpan();
+        for (int i = 0; i < numSamples; i++)
+        {
+            short sample = (short)(Math.Clamp(floatSamples[i], -1f, 1f) * 32767f);
+            if (!BitConverter.TryWriteBytes(byteSpan.Slice(i * 2, 2), sample))
+                throw new InvalidOperationException($"Failed to encode sample {i}.");  // Rare: buffer overflow
+        }
+        return pcmBytes;
+    }
+
+    public static async Task PlayWelcomeMessageAsync(LanguageModelConfig lmConfig, TtsStreamer tts, CancellationTokenSource cts)
+    {
+        if (cts.IsCancellationRequested)
+            return;
 
         var welcomeText = lmConfig.WelcomeMessage;
         if (string.IsNullOrWhiteSpace(welcomeText))
@@ -72,7 +59,7 @@ public class Program
             Log.Information("Generating and playing welcome message: '{WelcomeText}'", welcomeText);
 
             // Start streaming TTS for welcome (queues chunks via OnAudioReplyReady)
-            await tts.StartStreamingAsync(welcomeText, ct: _cts.Token);
+            await tts.StartStreamingAsync(welcomeText, ct: cts.Token);
         }
         catch (OperationCanceledException)
         {
@@ -84,88 +71,7 @@ public class Program
         }
     }
 
-    private static void SetupMicrophone()
-    {
-        _waveIn = new WaveInEvent
-        {
-            // Capture at 16kHz, 16-bit, mono (matches expected input for VAD/STT)
-            WaveFormat = new WaveFormat(rate: 16000, bits: 16, channels: 1)
-        };
-
-        // Buffer size for ~20ms frames (matches VAD frame length)
-        _waveIn.BufferMilliseconds = 20;
-        _waveIn.DataAvailable += OnMicrophoneDataAvailable;
-        _waveIn.StartRecording();
-
-        Log.Information("Microphone capture started at {Format}.", _waveIn.WaveFormat);
-    }
-
-    private static void OnMicrophoneDataAvailable(object? sender, WaveInEventArgs e)
-    {
-        if (_cts.IsCancellationRequested) return;
-
-        // Process the incoming audio chunk (16kHz PCM)
-        // No resampling needed if captured at 16kHz
-        // TODO: Integrate AEC (e.g., via WebRtcFilter) here to prevent self-detection of TTS output as input speech
-        _voiceAgentCore?.ProcessIncomingAudioChunk(e.Buffer);
-    }
-
-    private static void SetupSpeaker()
-    {
-        // Assume TTS outputs PCMU (8kHz, 8-bit, mono ulaw)
-        // Convert to PCM for playback
-        var playbackFormat = new WaveFormat(rate: 8000, bits: 16, channels: 1); // Standard PCM for WaveOut
-
-        _bufferedWaveProvider = new BufferedWaveProvider(playbackFormat)
-        {
-            DiscardOnBufferOverflow = true // Prevent backlog during interruptions
-        };
-
-        _waveOut = new WaveOutEvent();
-        _waveOut.Init(_bufferedWaveProvider);
-        _waveOut.Play();
-
-        Log.Information("Speaker playback started at {Format}.", playbackFormat);
-    }
-
-    private static void OnAudioReplyReady(byte[] pcmuChunk)
-    {
-        if (_cts.IsCancellationRequested || _bufferedWaveProvider == null) return;
-
-        try
-        {
-            // Convert PCMU (ulaw) to linear PCM 16-bit for playback
-            var pcmChunk = AudioAlgos.ConvertPcmuToPcm16kHz(pcmuChunk); // Assumes method exists in AudioAlgos
-            var pcm8KhzChunk = AudioAlgos.ResamplePcmWithNAudio(pcmChunk, inputSampleRate: 16000, outputSampleRate: 8000);
-
-            _bufferedWaveProvider.AddSamples(pcm8KhzChunk, 0, pcm8KhzChunk.Length);
-        }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "Failed to play TTS audio chunk.");
-        }
-    }
-
-    private static async Task ShutdownAsync()
-    {
-        _cts.Cancel();
-
-        _waveIn?.StopRecording();
-        _waveIn?.Dispose();
-
-        _waveOut?.Stop();
-        _waveOut?.Dispose();
-
-        if (_voiceAgentCore != null)
-        {
-            await _voiceAgentCore.ShutdownAsync();
-            _voiceAgentCore.Dispose();
-        }
-
-        Log.Information("Minimal Voice Agent shutdown complete.");
-    }
-
-    private static void AddConsoleLogger()
+    public static void AddConsoleLogger()
     {
         var serilogLogger = new LoggerConfiguration()
             .Enrich.FromLogContext()
@@ -173,7 +79,7 @@ public class Program
             .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
             .MinimumLevel.Override("System", LogEventLevel.Warning)
             .WriteTo.Console(
-                restrictedToMinimumLevel: LogEventLevel.Information,
+                restrictedToMinimumLevel: LogEventLevel.Debug,
                 outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}")
             .WriteTo.File(
                 path: "minimal_voice_agent_log.txt",
@@ -184,9 +90,301 @@ public class Program
                 retainedFileCountLimit: 5)
             .CreateLogger();
 
-        var factory = new SerilogLoggerFactory(serilogLogger);
         Log.Logger = serilogLogger;
-
         Log.Information("Serilog configured for minimal voice agent.");
+    }
+}
+
+// Custom TTS Data Provider for streaming chunks (implements ISoundDataProvider from SoundFlow)
+public class TtsQueueDataProvider : ISoundDataProvider
+{
+    private readonly ConcurrentQueue<byte[]> _chunks = new();
+    private readonly AudioFormat _format;
+    private int _position;
+    private int _length = -1;  // Live stream
+    private bool _isDisposed = false;
+    public TtsQueueDataProvider(AudioFormat format)
+    {
+        _format = format;
+    }
+
+    public int Position => _position;
+    public int Length => _length;
+    public bool CanSeek => false;
+    public SampleFormat SampleFormat => _format.Format;
+    public int SampleRate => _format.SampleRate;
+    public bool IsDisposed => _isDisposed;
+
+    public event EventHandler<PositionChangedEventArgs>? PositionChanged;
+    public event EventHandler<EventArgs>? EndOfStreamReached;
+
+    public int ReadBytes(Span<float> buffer)
+    {
+        int totalRead = 0;
+        while (totalRead < buffer.Length && !_chunks.IsEmpty)
+        {
+            if (_chunks.TryDequeue(out byte[]? chunk))
+            {
+                if (chunk == null) continue;
+
+                float[] floats = Algos.ConvertPcmToFloat(chunk.AsSpan());
+                int toCopy = Math.Min(buffer.Length - totalRead, floats.Length);
+                floats.AsSpan(0, toCopy).CopyTo(buffer.Slice(totalRead));
+                totalRead += toCopy;
+                _position += toCopy;
+            }
+        }
+
+        if (totalRead == 0 && _chunks.IsEmpty)
+        {
+            EndOfStreamReached?.Invoke(this, EventArgs.Empty);
+        }
+
+        return totalRead;
+    }
+
+    public void Seek(int offset)
+    {
+        // Not seekable
+    }
+
+    public void EnqueueChunk(byte[] chunk)
+    {
+        _chunks.Enqueue(chunk);
+        PositionChanged?.Invoke(this, new(_position));
+    }
+
+    public void Dispose()
+    {
+        _isDisposed = true;
+    }
+}
+
+public class Program
+{
+    private static VoiceAgentCore? _voiceAgentCore;
+    private static CancellationTokenSource _cts = new();
+    private static readonly AudioProcessingConfig _audioConfig = AudioProcessingConfig.CreateDefault();
+    private static AudioPacer? _audioPacer;
+
+    // SoundFlow graph components
+    private static MiniAudioEngine? _soundEngine;
+    private static FullDuplexDevice? _duplexDevice;
+    private static TtsQueueDataProvider? _ttsQueueProvider;
+    private static SoundPlayer? _ttsPlayer;
+    private static Recorder? _micRecorder;
+    private static WebRtcApmModifier? _apmModifier;
+    private static int _periodFrames = 0;  // Store intuited period size (samples.Length for mono)
+
+    public static async Task Main(string[] args)
+    {
+        Algos.AddConsoleLogger();
+
+        var lmConfig = await Algos.LoadLanguageModelConfigAsync("profiles/personal.json");
+        var sttConfig = await Algos.LoadSttSettingsAsync("sttsettings.json");
+
+        // Initialize TTS provider
+        await TtsProviderStreaming.InitializeAsync();
+
+        // Stub tool functions
+        var computerToolFunctions = new ComputerToolFunctions();
+
+        // Build Semantic Kernel
+        var kernel = Algos.BuildKernel(lmConfig);
+
+        // Initialize core components
+        _audioPacer = new AudioPacer();
+        var vad = new VadSpeechSegmenterSileroV5();
+        var tts = new TtsStreamer();
+        var stt = new SttProviderStreaming();
+        await stt.InitializeAsync(sttConfig.SttModelUrl);
+        var llm = new LlmChat(lmConfig, computerToolFunctions, kernel);
+
+        _voiceAgentCore = new VoiceAgentCore(stt, llm, tts, _audioPacer, doUseInterruption: false);
+        await _voiceAgentCore.InitializeAsync(vad);
+
+        // Wire TTS to pacer (pacer enqueues to provider)
+        _voiceAgentCore.OnAudioReplyReady += OnAudioReplyReady;
+
+        // Initialize engine and devices
+        await InitializeAudioAsync();
+
+        // play welcome
+        await Algos.PlayWelcomeMessageAsync(lmConfig, tts, _cts);
+
+        Log.Information("Voice Agent started. Speak now!");
+        Console.ReadKey();
+        await ShutdownAsync();
+    }
+
+    private static AudioFormat ProbeWorkingFormat(MiniAudioEngine engine,
+                                                  DeviceInfo captureInfo,
+                                                  DeviceInfo renderInfo)
+    {
+        var formatsToTry = new[]
+        {
+        new AudioFormat { SampleRate = 16000, Channels = 1, Format = SampleFormat.S16 },  // Prioritize for pipeline compatibility
+        new AudioFormat { SampleRate = 16000, Channels = 2, Format = SampleFormat.S16 },  // Stereo at 16kHz
+        new AudioFormat { SampleRate = 48000, Channels = 1, Format = SampleFormat.S16 },
+        new AudioFormat { SampleRate = 44100, Channels = 1, Format = SampleFormat.S16 },
+        new AudioFormat { SampleRate = 48000, Channels = 2, Format = SampleFormat.S16 },
+        new AudioFormat { SampleRate = 44100, Channels = 2, Format = SampleFormat.S16 },
+    };
+
+        foreach (var fmt in formatsToTry)
+        {
+            try
+            {
+                using var test = engine.InitializeFullDuplexDevice(renderInfo, captureInfo, fmt);
+                test.Start();
+                Thread.Sleep(500);  // Extended test for stability (e.g., capture a few frames)
+                test.Stop();
+                Log.Information("Device accepted {0} Hz {1} ch {2}", fmt.SampleRate, fmt.Channels, fmt.Format);
+                return fmt;
+            }
+            catch (Exception ex)
+            {
+                Log.Warning("Rejected {0} Hz {1} ch {2}: {3}", fmt.SampleRate, fmt.Channels, fmt.Format, ex.Message);
+            }
+        }
+
+        throw new InvalidOperationException("No compatible capture format found.");
+    }
+
+    private static async Task<AudioFormat> InitializeAudioAsync()
+    {
+        Log.Information("Initializing SoundFlow audio system...");
+
+        _soundEngine = new MiniAudioEngine();
+        _soundEngine.UpdateDevicesInfo();
+
+        var captureInfo = _soundEngine.CaptureDevices.FirstOrDefault(d => d.IsDefault);
+        if (captureInfo == default)
+            captureInfo = _soundEngine.CaptureDevices.First();
+
+        var renderInfo = _soundEngine.PlaybackDevices.FirstOrDefault(d => d.IsDefault);
+        if (renderInfo == default)
+            renderInfo = _soundEngine.PlaybackDevices.First();
+
+        Log.Information("Using capture: {Cap} / render: {Ren}", captureInfo.Name, renderInfo.Name);
+
+        // Find working format
+        var workingFormat = ProbeWorkingFormat(_soundEngine, captureInfo, renderInfo);
+
+        // Initialize full duplex device
+        try
+        {
+            _duplexDevice = _soundEngine.InitializeFullDuplexDevice(renderInfo, captureInfo, workingFormat);
+            Log.Debug("FullDuplexDevice initialized successfully with format: {0} Hz {1} ch {2}", workingFormat.SampleRate, workingFormat.Channels, workingFormat.Format);
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Failed to initialize FullDuplexDevice.");
+            throw;
+        }
+
+        // Configure audio config for pipeline
+        //_audioConfig.ProcessingSampleRate = 16000;
+        //_audioConfig.Channels = workingFormat.Channels;
+
+        // WebRTC APM setup
+        _apmModifier = new WebRtcApmModifier(
+            device: _duplexDevice,
+            aecEnabled: true,
+            nsEnabled: true,
+            agc1Enabled: false,
+            agc2Enabled: true,
+            nsLevel: SoundFlow.Extensions.WebRtc.Apm.NoiseSuppressionLevel.High
+        );
+                
+        // Microphone recorder
+        _micRecorder = new Recorder(
+            captureDevice: _duplexDevice.CaptureDevice,
+            callback: (samples, channels) =>
+        {
+            if (_cts.IsCancellationRequested) return;
+
+            try
+            {
+                if (_periodFrames == 0 && samples.Length > 0)
+                {
+                    _periodFrames = samples.Length;  // Intuit once: e.g., 960
+                    Log.Information("Intuited period size: {0} frames ({1}ms at {2}Hz)",
+                        _periodFrames, (_periodFrames * 1000 / workingFormat.SampleRate), workingFormat.SampleRate);
+                }
+
+                const int targetFrames = 320;  // 20ms at 16kHz (expected by APM/VAD)
+                for (int i = 0; i < samples.Length; i += targetFrames)
+                {
+                    int sliceLength = Math.Min(targetFrames, samples.Length - i);
+                    var subSamples = samples.Slice(i, sliceLength);
+                    byte[] micChunk = Algos.ConvertFloatToPcm(subSamples);
+                    _voiceAgentCore?.ProcessIncomingAudioChunk(micChunk);
+                }
+            }
+            catch (Exception ex)
+            {
+                Log.Error(ex, "Error processing mic chunk.");
+            }
+        }
+    );
+
+        _micRecorder.AddModifier(_apmModifier);
+        _micRecorder.StartRecording();
+
+        // TTS playback
+        _ttsQueueProvider = new TtsQueueDataProvider(workingFormat);
+        _ttsPlayer = new SoundPlayer(_soundEngine, workingFormat, _ttsQueueProvider);
+        _duplexDevice.PlaybackDevice.MasterMixer.AddComponent(_ttsPlayer);
+        _ttsPlayer.Play();
+
+        // Start devices
+        _duplexDevice.Start();
+        _audioPacer!.Initialize(chunk => _ttsQueueProvider.EnqueueChunk(chunk));
+
+        Log.Information("Audio initialized: {Rate}Hz {Ch}ch {Fmt}", workingFormat.SampleRate, workingFormat.Channels, workingFormat.Format);
+        return workingFormat;
+    }
+
+    private static void OnAudioReplyReady(byte[] pcmChunk)
+    {
+        if (_cts.IsCancellationRequested || pcmChunk == null || pcmChunk.Length == 0) return;
+
+        try
+        {
+            _audioPacer?.EnqueueBufferForSendManual(pcmChunk);
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Failed to enqueue TTS audio chunk for playback.");
+        }
+    }
+
+    private static async Task ShutdownAsync()
+    {
+        await _cts.CancelAsync();
+
+        // Stop audio input first to prevent further callbacks
+        _micRecorder?.StopRecording();
+        _duplexDevice?.Stop();
+
+        // Now safe to shut down core (disposes VAD/SileroModel)
+        if (_voiceAgentCore != null)
+        {
+            await _voiceAgentCore.ShutdownAsync();
+            await _voiceAgentCore.DisposeAsync();
+        }
+
+        // Dispose remaining resources
+        _micRecorder?.Dispose();
+        _ttsPlayer?.Stop();
+        _ttsPlayer?.Dispose();
+        _ttsQueueProvider?.Dispose();
+        _duplexDevice?.Dispose();
+        _audioPacer?.Dispose();
+        _apmModifier?.Dispose();
+        _soundEngine?.Dispose();
+
+        Log.Information("Minimal Voice Agent shutdown complete.");
     }
 }

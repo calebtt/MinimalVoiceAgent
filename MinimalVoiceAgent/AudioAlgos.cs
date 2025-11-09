@@ -2,6 +2,7 @@
 using NAudio.Dsp;
 using NAudio.Wave;
 using Serilog;
+using System.Runtime.InteropServices;
 
 namespace MinimalVoiceAgent;
 public static class AudioAlgos
@@ -102,33 +103,6 @@ public static class AudioAlgos
     }
 
     /// <summary>
-    /// Processes a PCMU chunk to halve its volume by decoding to linear PCM, scaling, and re-encoding.
-    /// The operation is purely per-sample: it decodes each mu-law (PCMU) byte to a linear PCM value, 
-    /// applies a scalar multiplier to adjust amplitude, clamps if needed, and re-encodes to mu-law—without 
-    /// any dependency on timing, duration, or frequency content. This holds regardless of whether the audio 
-    /// is at 8 kHz (standard for G.711) or another rate, as long as the input is a valid sequence of mu-law samples.
-    /// </summary>
-    public static byte[] AdjustPcmuVolume(byte[] pcmuInput, float scaleFactor = 0.5f)
-    {
-        int sampleCount = pcmuInput.Length;
-        byte[] output = new byte[sampleCount];
-
-        for (int i = 0; i < sampleCount; i++)
-        {
-            // Decode mu-law sample to 16-bit linear PCM
-            short linear = MuLawDecoder.MuLawToLinearSample(pcmuInput[i]);
-            // Scale by scaleFactor
-            int scaled = (int)(linear * scaleFactor);
-            // Clamp to 16-bit range if necessary (though scaling should not overflow)
-            if (scaled > short.MaxValue) scaled = short.MaxValue;
-            if (scaled < short.MinValue) scaled = short.MinValue;
-            // Re-encode to mu-law
-            output[i] = MuLawEncoder.LinearToMuLawSample((short)scaled);
-        }
-        return output;
-    }
-
-    /// <summary>
     /// Converts 16-bit PCM audio (e.g., at 16kHz) to PCMU (G.711 μ-law) encoded audio at the specified output rate (default 8kHz for telephony).
     /// </summary>
     /// <param name="pcmAudio">16-bit mono PCM byte array (e.g., 16kHz)</param>
@@ -178,6 +152,16 @@ public static class AudioAlgos
             Log.Error(ex, "Failed to convert PCM to PCMU.");
             return Array.Empty<byte>();
         }
+    }
+
+    public static byte[] AdjustPcmVolume(byte[] pcmFrame, float factor)
+    {
+        var samples = MemoryMarshal.Cast<byte, short>(pcmFrame.AsSpan());
+        for (int i = 0; i < samples.Length; i++)
+        {
+            samples[i] = (short)Math.Clamp(samples[i] * factor, short.MinValue, short.MaxValue);
+        }
+        return pcmFrame;
     }
 
     /// <summary>

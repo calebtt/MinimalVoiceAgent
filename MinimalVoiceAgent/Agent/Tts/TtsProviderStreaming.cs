@@ -135,6 +135,71 @@ public static class TtsProviderStreaming
     public const string DefaultVoiceKey = "af_heart"; // Natural American English
 
     /// <summary>
+    /// Pre-initializes the service for better first-call performance (SRP: Init only).
+    /// </summary>
+    public static async Task InitializeAsync(string? voiceKey = null, CancellationToken ct = default)
+    {
+        voiceKey ??= DefaultVoiceKey;
+        await Task.Run(() =>
+        {
+            _ = KokoroTTS.LoadModel();
+        }, ct).ConfigureAwait(false);
+
+        // Cache default voice (OCP: Lazy per-call, but init for perf)
+        if (!_voiceCache.ContainsKey(voiceKey))
+        {
+            var voice = KokoroVoiceManager.GetVoice(voiceKey) ?? throw new ArgumentException("Default voice not found.", nameof(voiceKey));
+            _voiceCache[voiceKey] = voice;
+        }
+    }
+
+    /// <summary>
+    /// Ensures initialized (internal async).
+    /// </summary>
+    private static async Task EnsureInitializedAsync(CancellationToken ct)
+    {
+        await _initLock.WaitAsync(ct).ConfigureAwait(false);
+        try
+        {
+            if (_synthesizer is null)
+            {
+                ct.ThrowIfCancellationRequested();
+                _ = KokoroTTS.LoadModel(); // Existing
+
+                if (!File.Exists(_modelPath))
+                    throw new InvalidOperationException($"Kokoro model not found at {_modelPath}");
+
+                var sessionOptions = SessionOptions.MakeSessionOptionWithCudaProvider(0); // deviceId=0 for primary GPU
+                //var sessionOptions = SessionOptions.MakeSessionOptionWithTensorrtProvider(0); // deviceId=0 for primary GPU
+                sessionOptions.GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL; // Modern: Full opts for perf
+                sessionOptions.EnableMemoryPattern = true; // Reduce VRAM allocs
+                sessionOptions.ExecutionMode = ExecutionMode.ORT_SEQUENTIAL; // Stable for TTS
+                sessionOptions.IntraOpNumThreads = Environment.ProcessorCount; // Max CPU threads for non-GPU ops
+                sessionOptions.InterOpNumThreads = 1; // Single thread for inter-op to reduce context switching
+
+                //sessionOptions.AppendExecutionProvider_CUDA(); // Ensure CUDA provider appended
+                Log.Information("Attempting to initialize Kokoro with GPU acceleration...");
+                try
+                {
+                    // Assuming KokoroWavSynthesizer accepts SessionOptions (check/fork source if not)
+                    _synthesizer = new KokoroWavSynthesizer(_modelPath, sessionOptions);
+                }
+                catch (OnnxRuntimeException ex) when (ex.Message.Contains("CUDA") || ex.Message.Contains("cuDNN"))
+                {
+                    Log.Error(ex, "GPU init failed - falling back to CPU. Check CUDA/cuDNN versions and PATH.");
+                    // Fallback: Create CPU session
+                    var cpuOptions = new SessionOptions();
+                    _synthesizer = new KokoroWavSynthesizer(_modelPath, cpuOptions);
+                }
+            }
+        }
+        finally
+        {
+            _initLock.Release();
+        }
+    }
+
+    /// <summary>
     /// Synthesizes text to audio asynchronously, returning a seekable MemoryStream (non-streaming, full utterance).
     /// </summary>
     public static async Task<MemoryStream> TextToSpeechAsync(
@@ -222,7 +287,7 @@ public static class TtsProviderStreaming
         });
 
         // PRIORITY: Yield first sentence immediately (sync via helper for fast start)
-        var firstChunk = await SynthesizeSentenceToPcmuAsync(_synthesizer!, voice, sentences[0], ct).ConfigureAwait(false);
+        var firstChunk = await SynthesizeSentenceToPcmAsync(_synthesizer!, voice, sentences[0], ct).ConfigureAwait(false);
         if (firstChunk.Length > 0)
         {
             await channel.Writer.WriteAsync(firstChunk, ct).ConfigureAwait(false);
@@ -233,7 +298,7 @@ public static class TtsProviderStreaming
         _ = WriteRemainingSentencesAsync(sentences, 1, voice, channel.Writer, ct);
 
         // Yield all chunks (first already written)
-        await foreach (var chunk in YieldChunksFromChannel(channel.Reader, ct))
+        await foreach (var chunk in YieldChunksFromChannelAsync(channel.Reader, ct))
         {
             yield return chunk;
         }
@@ -242,10 +307,10 @@ public static class TtsProviderStreaming
     }
 
     /// <summary>
-    /// Helper: Synthesizes a single sentence to PCMU bytes (sync inference wrapped in ValueTask for perf).
+    /// Helper: Synthesizes a single sentence to 16khz 16bit mono PCM bytes
     /// Logs RTF for first sentence only (via optional param).
     /// </summary>
-    private static async ValueTask<byte[]> SynthesizeSentenceToPcmuAsync(
+    private static async ValueTask<byte[]> SynthesizeSentenceToPcmAsync(
         KokoroWavSynthesizer synthesizer,
         KokoroVoice voice,
         string sentence,
@@ -260,19 +325,16 @@ public static class TtsProviderStreaming
             if (rawPcm.Length == 0)
                 return Array.Empty<byte>();
 
-            var tempWav = Algos.CreateWavFromPcm(rawPcm, 22050);
-            var pcm8k = Algos.ConvertWavToPcm(tempWav, 8000);
-            var chunk = Algos.EncodePcmToPcmuWithNAudio(pcm8k);
+            var pcm16k = Algos.ConvertWavToPcm(Algos.CreateWavFromPcm(rawPcm, 22050), 16000);
 
             if (logRtf)
             {
                 perfTimer!.Stop();
                 var rtf = (double)sentence.Length / perfTimer.Elapsed.TotalSeconds;
                 Log.Information("TTS first-sentence RTF: {Rtf:F2} chars/sec ({Elapsed}s for {Length} chars)", rtf, perfTimer.Elapsed.TotalSeconds, sentence.Length);
-                Log.Debug("Streaming TTS: First sentence chunk ready ({Bytes} bytes)", chunk.Length);
             }
 
-            return chunk;
+            return pcm16k;
         }
         catch (Exception ex)
         {
@@ -303,7 +365,7 @@ public static class TtsProviderStreaming
                 await semaphore.WaitAsync(ct).ConfigureAwait(false);
                 try
                 {
-                    return await SynthesizeSentenceToPcmuAsync(_synthesizer!, voice, sentence, ct).ConfigureAwait(false);
+                    return await SynthesizeSentenceToPcmAsync(_synthesizer!, voice, sentence, ct).ConfigureAwait(false);
                 }
                 finally
                 {
@@ -334,7 +396,7 @@ public static class TtsProviderStreaming
     /// <summary>
     /// Helper: Yields chunks from channel reader with explicit cancellation check (thin wrapper for clarity).
     /// </summary>
-    private static async IAsyncEnumerable<byte[]> YieldChunksFromChannel(
+    private static async IAsyncEnumerable<byte[]> YieldChunksFromChannelAsync(
         ChannelReader<byte[]> reader,
         [EnumeratorCancellation] CancellationToken ct)
     {
@@ -346,76 +408,11 @@ public static class TtsProviderStreaming
     }
 
     /// <summary>
-    /// Pre-initializes the service for better first-call performance (SRP: Init only).
-    /// </summary>
-    public static async Task InitializeAsync(string? voiceKey = null, CancellationToken ct = default)
-    {
-        voiceKey ??= DefaultVoiceKey;
-        await Task.Run(() =>
-        {
-            _ = KokoroTTS.LoadModel();
-        }, ct).ConfigureAwait(false);
-
-        // Cache default voice (OCP: Lazy per-call, but init for perf)
-        if (!_voiceCache.ContainsKey(voiceKey))
-        {
-            var voice = KokoroVoiceManager.GetVoice(voiceKey) ?? throw new ArgumentException("Default voice not found.", nameof(voiceKey));
-            _voiceCache[voiceKey] = voice;
-        }
-    }
-
-    /// <summary>
     /// Lists available voice keys synchronously for American English (SRP: Query only).
     /// </summary>
     public static IReadOnlyList<string> ListVoices()
     {
         return KokoroVoiceManager.GetVoices(KokoroLanguage.AmericanEnglish).Select(v => v.Name).ToList();
-    }
-
-    /// <summary>
-    /// Ensures initialized (internal async).
-    /// </summary>
-    private static async Task EnsureInitializedAsync(CancellationToken ct)
-    {
-        await _initLock.WaitAsync(ct).ConfigureAwait(false);
-        try
-        {
-            if (_synthesizer is null)
-            {
-                ct.ThrowIfCancellationRequested();
-                _ = KokoroTTS.LoadModel(); // Existing
-
-                if (!File.Exists(_modelPath))
-                    throw new InvalidOperationException($"Kokoro model not found at {_modelPath}");
-
-                var sessionOptions = SessionOptions.MakeSessionOptionWithCudaProvider(0); // deviceId=0 for primary GPU
-                //var sessionOptions = SessionOptions.MakeSessionOptionWithTensorrtProvider(0); // deviceId=0 for primary GPU
-                sessionOptions.GraphOptimizationLevel = GraphOptimizationLevel.ORT_ENABLE_ALL; // Modern: Full opts for perf
-                sessionOptions.EnableMemoryPattern = true; // Reduce VRAM allocs
-                sessionOptions.ExecutionMode = ExecutionMode.ORT_SEQUENTIAL; // Stable for TTS
-                sessionOptions.IntraOpNumThreads = Environment.ProcessorCount; // Max CPU threads for non-GPU ops
-                sessionOptions.InterOpNumThreads = 1; // Single thread for inter-op to reduce context switching
-
-                //sessionOptions.AppendExecutionProvider_CUDA(); // Ensure CUDA provider appended
-                Log.Information("Attempting to initialize Kokoro with GPU acceleration...");
-                try
-                {
-                    // Assuming KokoroWavSynthesizer accepts SessionOptions (check/fork source if not)
-                    _synthesizer = new KokoroWavSynthesizer(_modelPath, sessionOptions);
-                }
-                catch (OnnxRuntimeException ex) when (ex.Message.Contains("CUDA") || ex.Message.Contains("cuDNN"))
-                {
-                    Log.Error(ex, "GPU init failed - falling back to CPU. Check CUDA/cuDNN versions and PATH.");
-                    // Fallback: Create CPU session
-                    var cpuOptions = new SessionOptions();
-                    _synthesizer = new KokoroWavSynthesizer(_modelPath, cpuOptions);
-                }
-            }
-        }
-        finally
-        {
-            _initLock.Release();
-        }
     }
 
     /// <summary>

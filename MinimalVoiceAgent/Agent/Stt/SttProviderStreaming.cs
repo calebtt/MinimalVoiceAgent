@@ -163,8 +163,8 @@ public static partial class Algos
 /// </summary>
 public class SttProviderStreaming : IDisposable
 {
-    private readonly WhisperFactory _factory;
-    private readonly WhisperProcessor _processor;
+    private WhisperFactory? _factory;
+    private WhisperProcessor? _processor;
     private readonly WaveFormat _waveFormat = new(16000, 16, 1);
     private readonly ConcurrentQueue<TranscriptionSegment> _segments = new();
     private readonly object _segmentLock = new();
@@ -179,9 +179,16 @@ public class SttProviderStreaming : IDisposable
 
     // Events
     public event EventHandler<string>? TranscriptionComplete; // Fired when complete transcription is ready
-    static object _downloadLock = new();
+    
+    public SttProviderStreaming()
+    {
+    }
 
-    public SttProviderStreaming(string modelUrl)
+    /// <summary>
+    /// Initialization may involve downloading the model if not present locally.
+    /// </summary>
+    /// <param name="modelUrl">Path to model file or URL</param>
+    public async Task InitializeAsync(string modelUrl)
     {
         // Resolve local path (e.g., ./models/{filename})
         var filename = Path.GetFileName(modelUrl);
@@ -192,7 +199,7 @@ public class SttProviderStreaming : IDisposable
         {
             Log.Warning("STT model not found locally at {LocalPath}; downloading from {Url}", localModelPath, modelUrl);
             // Download is sync here
-            DownloadModelAsync(modelUrl, localModelPath).GetAwaiter().GetResult();
+            await DownloadModelAsync(modelUrl, localModelPath);
         }
         else
         {
@@ -284,7 +291,7 @@ public class SttProviderStreaming : IDisposable
             using var wavStream = Algos.PcmToWavStream(pcmBytes, _waveFormat);
 
             var segments = new List<dynamic>();
-            await foreach (var seg in _processor.ProcessAsync(wavStream))
+            await foreach (var seg in _processor!.ProcessAsync(wavStream))
             {
                 segments.Add(seg);
             }

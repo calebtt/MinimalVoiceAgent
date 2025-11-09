@@ -7,6 +7,10 @@
     <Nullable>enable</Nullable>
   </PropertyGroup>
 
+	<PropertyGroup>
+		<LangVersion>13.0</LangVersion>
+	</PropertyGroup>
+
 	<ItemGroup>
 		<PackageReference Include="KokoroSharp.GPU" Version="0.6.2" />
 		<PackageReference Include="KokoroSharp.GPU.Windows" Version="0.6.2" />
@@ -25,11 +29,14 @@
 		<PackageReference Include="Microsoft.SemanticKernel.Plugins.OpenApi" Version="1.66.0" />
 		<PackageReference Include="Microsoft.SemanticKernel.Plugins.OpenApi.Extensions" Version="1.66.0-alpha" />
 		<PackageReference Include="Microsoft.SemanticKernel.Plugins.Web" Version="1.66.0-alpha" />
+		<PackageReference Include="Microsoft.ML.OnnxRuntime.Gpu" Version="1.23.1" />
 		<PackageReference Include="NAudio" Version="2.2.1" />
 		<PackageReference Include="Serilog.Extensions.Logging" Version="9.0.0" />
 		<PackageReference Include="Serilog.Sinks.Console" Version="6.0.0" />
 		<PackageReference Include="Serilog.Sinks.Debug" Version="3.0.0" />
 		<PackageReference Include="Serilog.Sinks.File" Version="7.0.0" />
+		<PackageReference Include="SoundFlow" Version="1.2.1" />
+		<PackageReference Include="SoundFlow.Extensions.WebRtc.Apm" Version="1.0.4" />
 		<PackageReference Include="System.Management" Version="9.0.10" />
 		<PackageReference Include="Whisper.net" Version="1.8.1" />
 		<PackageReference Include="Whisper.net.Runtime.Cuda" Version="1.8.1" />
