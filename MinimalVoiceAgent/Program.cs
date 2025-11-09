@@ -101,14 +101,13 @@ public static partial class Algos
                 retainedFileCountLimit: 5)
             .CreateLogger();
 
-        var factory = new SerilogLoggerFactory(serilogLogger);
         Log.Logger = serilogLogger;
 
         Log.Information("Serilog configured for minimal voice agent.");
     }
 }
 
-// Custom TTS Data Provider for streaming chunks (implements ISoundDataProvider)
+// Custom TTS Data Provider for streaming chunks (implements ISoundDataProvider from SoundFlow)
 public class TtsQueueDataProvider : ISoundDataProvider
 {
     private readonly ConcurrentQueue<byte[]> _chunks = new();
@@ -177,7 +176,7 @@ public class Program
 {
     private static VoiceAgentCore? _voiceAgentCore;
     private static CancellationTokenSource _cts = new();
-    private static AudioProcessingConfig _audioConfig = AudioProcessingConfig.CreateDefault();
+    private static readonly AudioProcessingConfig _audioConfig = AudioProcessingConfig.CreateDefault();
     private static AudioPacer? _audioPacer;
 
     // SoundFlow graph components
@@ -313,7 +312,7 @@ public class Program
         // Microphone recorder
         _micRecorder = new Recorder(
             captureDevice: _duplexDevice.CaptureDevice,
-            callback: (Span<float> samples, Capability channels) =>
+            callback: (samples, channels) =>
         {
             if (_cts.IsCancellationRequested) return;
 
@@ -353,12 +352,11 @@ public class Program
 
         // Start devices
         _duplexDevice.Start();
-        _audioPacer.Initialize(chunk => _ttsQueueProvider.EnqueueChunk(chunk));
+        _audioPacer!.Initialize(chunk => _ttsQueueProvider.EnqueueChunk(chunk));
 
         Log.Information("Audio initialized: {Rate}Hz {Ch}ch {Fmt}", workingFormat.SampleRate, workingFormat.Channels, workingFormat.Format);
         return workingFormat;
     }
-
 
     private static void OnAudioReplyReady(byte[] pcmChunk)
     {
@@ -378,26 +376,25 @@ public class Program
     {
         await _cts.CancelAsync();
 
+        // Stop audio input first to prevent further callbacks
+        _micRecorder?.StopRecording();
+        _duplexDevice?.Stop();
+
+        // Now safe to shut down core (disposes VAD/SileroModel)
         if (_voiceAgentCore != null)
         {
             await _voiceAgentCore.ShutdownAsync();
-            _voiceAgentCore.Dispose();
+            await _voiceAgentCore.DisposeAsync();
         }
 
-        _micRecorder?.StopRecording();
+        // Dispose remaining resources
         _micRecorder?.Dispose();
-
         _ttsPlayer?.Stop();
         _ttsPlayer?.Dispose();
         _ttsQueueProvider?.Dispose();
-
-        _duplexDevice?.Stop();
         _duplexDevice?.Dispose();
-
         _audioPacer?.Dispose();
-
         _apmModifier?.Dispose();
-
         _soundEngine?.Dispose();
 
         Log.Information("Minimal Voice Agent shutdown complete.");
