@@ -42,17 +42,6 @@ public static partial class Algos
         return pcmBytes;
     }
 
-    public static SoundFlow.Extensions.WebRtc.Apm.NoiseSuppressionLevel MapNoiseLevel(NoiseSuppressionLevel customLevel)
-    {
-        return customLevel switch
-        {
-            NoiseSuppressionLevel.Conservative => SoundFlow.Extensions.WebRtc.Apm.NoiseSuppressionLevel.Low,
-            NoiseSuppressionLevel.Moderate => SoundFlow.Extensions.WebRtc.Apm.NoiseSuppressionLevel.Moderate,
-            NoiseSuppressionLevel.Aggressive => SoundFlow.Extensions.WebRtc.Apm.NoiseSuppressionLevel.High,
-            _ => SoundFlow.Extensions.WebRtc.Apm.NoiseSuppressionLevel.Moderate
-        };
-    }
-
     public static async Task PlayWelcomeMessageAsync(LanguageModelConfig lmConfig, TtsStreamer tts, CancellationTokenSource cts)
     {
         if (cts.IsCancellationRequested)
@@ -102,7 +91,6 @@ public static partial class Algos
             .CreateLogger();
 
         Log.Logger = serilogLogger;
-
         Log.Information("Serilog configured for minimal voice agent.");
     }
 }
