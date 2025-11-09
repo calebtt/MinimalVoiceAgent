@@ -306,9 +306,10 @@ public class Program
             aecEnabled: true,
             nsEnabled: true,
             agc1Enabled: false,
-            agc2Enabled: true
+            agc2Enabled: true,
+            nsLevel: SoundFlow.Extensions.WebRtc.Apm.NoiseSuppressionLevel.High
         );
-
+                
         // Microphone recorder
         _micRecorder = new Recorder(
             captureDevice: _duplexDevice.CaptureDevice,
