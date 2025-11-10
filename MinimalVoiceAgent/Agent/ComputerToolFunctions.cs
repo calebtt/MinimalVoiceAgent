@@ -141,9 +141,7 @@ public static partial class Algos
 /// <summary>
 /// Standalone class with tool functions tailored for common tasks on a nerdy man's computer.
 /// Focuses on local system operations like volume control, system info, timers, calculations, reminders, file ops, media automation, and more.
-/// Best practices: Async methods where possible, immutable data, explicit error handling, modern C# features (e.g., primary constructors, null-forgiving).
-/// Dependencies: NAudio (audio), System.Management (hardware), WindowsInput (simulation), System.Drawing.Common (screenshots).
-/// New: Python subprocess for intelligent ad detection via LLaVA captioning (requires Python + torch/transformers installed locally).
+/// TODO: Add the screen dimming feature from my app remote control tool.
 /// </summary>
 public class ComputerToolFunctions
 {
