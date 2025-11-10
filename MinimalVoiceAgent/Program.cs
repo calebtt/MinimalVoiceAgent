@@ -146,16 +146,7 @@ public class Program
 
         await _audioRouter.InitializeAsync();
 
-        _voiceAgentCore = VoiceAgentCore.CreateBuilder()
-            .WithSttProvider(stt)
-            .WithLlmChat(llm)
-            .WithTtsStreamer(tts)
-            .WithAudioPacer(_audioPacer)
-            .WithInterruption(false)
-            .WithWakeIdentifier("Alina")
-            .WithTtsAudioResponseHandler(pcmChunk => _audioRouter.EnqueueTtsChunk(pcmChunk))
-            .WithVadSegmenter(vad)
-            .Build();
+        _voiceAgentCore.OnAudioReplyReady += pcmChunk => _audioRouter.EnqueueTtsChunk(pcmChunk);
 
         // play welcome
         await Algos.PlayWelcomeMessageAsync(lmConfig, tts, _cts);
