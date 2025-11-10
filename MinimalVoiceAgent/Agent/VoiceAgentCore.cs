@@ -5,12 +5,13 @@ namespace MinimalVoiceAgent;
 
 public class VoiceAgentCore : IAsyncDisposable
 {
-    private const float VolumeLoweringFactor = 0.35f;
-
     private readonly SttProviderStreaming _streamingSttClient;
     private readonly LlmChat _llmChat;
     private readonly TtsStreamer _ttsStreamer;
     private readonly AudioPacer _audioPacer;
+
+    private readonly float _volumeLoweringFactor;
+    private readonly string? _wakeWord;
 
     private CancellationTokenSource? _cancellationTokenSource;
     private IVadSpeechSegmenter? _vad;
@@ -27,23 +28,28 @@ public class VoiceAgentCore : IAsyncDisposable
     /// </summary>
     public event Action<byte[]>? OnAudioReplyReady;
 
-    public VoiceAgentCore(
+    private VoiceAgentCore(
         SttProviderStreaming streamingSttClient,
         LlmChat llmChat,
         TtsStreamer ttsStreamer,
         AudioPacer audioPacer,
-        bool doUseInterruption = true)
+        bool doUseInterruption,
+        string? wakeWord,
+        float volumeLoweringFactor)
     {
         _streamingSttClient = streamingSttClient ?? throw new ArgumentNullException(nameof(streamingSttClient));
         _llmChat = llmChat ?? throw new ArgumentNullException(nameof(llmChat));
         _ttsStreamer = ttsStreamer ?? throw new ArgumentNullException(nameof(ttsStreamer));
         _audioPacer = audioPacer ?? throw new ArgumentNullException(nameof(audioPacer));
+        _doUseInterruption = doUseInterruption;
+        _wakeWord = wakeWord;
+        _volumeLoweringFactor = volumeLoweringFactor;
+
         _ttsStreamer.OnAudioChunkReady += (sender, chunk) => OnAudioReplyReady?.Invoke(chunk!);
 
         _streamingSttClient.TranscriptionComplete += OnTranscriptionComplete;
 
         Log.Information("VoiceAgentCore created.");
-        _doUseInterruption = doUseInterruption;
     }
 
     public bool IsProcessingTranscription => _isProcessingTranscription;
@@ -70,7 +76,7 @@ public class VoiceAgentCore : IAsyncDisposable
                     if (_doUseInterruption)
                     {
                         Log.Information("VAD: Applying volume filter for interruption.");
-                        _audioPacer.ApplyFilter(chunk => AudioAlgos.AdjustPcmVolume(chunk, VolumeLoweringFactor));
+                        _audioPacer.ApplyFilter(chunk => AudioAlgos.AdjustPcmVolume(chunk, _volumeLoweringFactor));
                         volumeFilterActive = true;
                     }
                     else
@@ -120,7 +126,7 @@ public class VoiceAgentCore : IAsyncDisposable
     {
         try
         {
-            if(_cancellationTokenSource != null)
+            if (_cancellationTokenSource != null)
                 await _cancellationTokenSource!.CancelAsync();
 
             _vad?.Dispose();
@@ -166,6 +172,21 @@ public class VoiceAgentCore : IAsyncDisposable
     /// </summary>
     private void OnTranscriptionComplete(object? sender, string transcription)
     {
+        transcription = transcription.Trim();
+
+        if (!string.IsNullOrEmpty(_wakeWord) &&
+            !transcription.StartsWith(_wakeWord, StringComparison.OrdinalIgnoreCase))
+        {
+            Log.Information($"VoiceAgentCore: Ignoring transcription without wake word '{_wakeWord}': '{transcription}'");
+            return;
+        }
+
+        // Remove wake word if present
+        if (!string.IsNullOrEmpty(_wakeWord))
+        {
+            transcription = transcription.Substring(_wakeWord.Length).Trim();
+        }
+
         if (!_doUseInterruption && _audioPacer.IsAudioPlaying)
         {
             // Ignore new transcription if not using interruption and TTS is playing
@@ -173,7 +194,7 @@ public class VoiceAgentCore : IAsyncDisposable
             return;
         }
 
-        Log.Information($"VoiceAgentCore: STT Complete transcription: '{transcription}'");
+        Log.Information($"VoiceAgentCore: STT Complete transcription (after wake word check): '{transcription}'");
 
         bool shouldProcess;
         lock (_processingLock)
@@ -305,5 +326,111 @@ public class VoiceAgentCore : IAsyncDisposable
     ~VoiceAgentCore()
     {
         Dispose(false);
+    }
+
+    public static Builder CreateBuilder()
+    {
+        return new Builder();
+    }
+
+    public class Builder
+    {
+        private SttProviderStreaming? _sttClient;
+        private LlmChat? _llmChat;
+        private TtsStreamer? _ttsStreamer;
+        private AudioPacer? _audioPacer;
+        private bool _doUseInterruption = true;
+        private string? _wakeWord;
+        private Action<byte[]>? _audioResponseHandler;
+        private float _volumeLoweringFactor = 0.35f;
+        private IVadSpeechSegmenter? _vadSegmenter;
+
+        public Builder WithSttProvider(SttProviderStreaming sttClient)
+        {
+            _sttClient = sttClient;
+            return this;
+        }
+
+        public Builder WithLlmChat(LlmChat llmChat)
+        {
+            _llmChat = llmChat;
+            return this;
+        }
+
+        public Builder WithTtsStreamer(TtsStreamer ttsStreamer)
+        {
+            _ttsStreamer = ttsStreamer;
+            return this;
+        }
+
+        public Builder WithAudioPacer(AudioPacer audioPacer)
+        {
+            _audioPacer = audioPacer;
+            return this;
+        }
+
+        public Builder WithWakeIdentifier(string wakeWord)
+        {
+            _wakeWord = wakeWord;
+            return this;
+        }
+
+        public Builder WithInterruption(bool useInterruption)
+        {
+            _doUseInterruption = useInterruption;
+            return this;
+        }
+
+        public Builder WithTtsAudioResponseHandler(Action<byte[]> handler)
+        {
+            _audioResponseHandler = handler;
+            return this;
+        }
+
+        public Builder WithVolumeLoweringFactor(float factor)
+        {
+            _volumeLoweringFactor = factor;
+            return this;
+        }
+
+        public Builder WithVadSegmenter(IVadSpeechSegmenter vadSegmenter)
+        {
+            _vadSegmenter = vadSegmenter;
+            return this;
+        }
+
+        /// <summary>
+        /// If no VAD segmenter is provided, the core will not be initialized with one.
+        /// </summary>
+        /// <returns></returns>
+        /// <exception cref="InvalidOperationException"></exception>
+        public VoiceAgentCore Build()
+        {
+            if (_sttClient == null) throw new InvalidOperationException("STT provider is required.");
+            if (_llmChat == null) throw new InvalidOperationException("LLM chat is required.");
+            if (_ttsStreamer == null) throw new InvalidOperationException("TTS streamer is required.");
+            if (_audioPacer == null) throw new InvalidOperationException("Audio pacer is required.");
+
+            var core = new VoiceAgentCore(
+                _sttClient,
+                _llmChat,
+                _ttsStreamer,
+                _audioPacer,
+                _doUseInterruption,
+                _wakeWord,
+                _volumeLoweringFactor);
+
+            if (_audioResponseHandler != null)
+            {
+                core.OnAudioReplyReady += _audioResponseHandler;
+            }
+
+            if (_vadSegmenter != null)
+            {
+                core.InitializeAsync(_vadSegmenter).GetAwaiter().GetResult(); // Synchronous wait for simplicity in builder
+            }
+
+            return core;
+        }
     }
 }
