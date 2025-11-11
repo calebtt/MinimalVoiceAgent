@@ -1,5 +1,4 @@
-﻿using MinimalVoiceAgent;
-using Serilog;
+﻿using Serilog;
 using SoundFlow.Abstracts.Devices;
 using SoundFlow.Backends.MiniAudio;
 using SoundFlow.Components;

@@ -1,5 +1,5 @@
-﻿using Serilog;
-using MinimalSileroVAD.Core;
+﻿using MinimalSileroVAD.Core;
+using Serilog;
 
 namespace MinimalVoiceAgent;
 

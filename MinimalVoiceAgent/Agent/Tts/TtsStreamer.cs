@@ -34,7 +34,7 @@ public class TtsStreamer : IDisposable
             _isPlaying = true;
         }
 
-        if(_cancellationSource != null)
+        if (_cancellationSource != null)
             await _cancellationSource!.CancelAsync();
         _cancellationSource = CancellationTokenSource.CreateLinkedTokenSource(ct);
 

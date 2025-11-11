@@ -179,7 +179,7 @@ public class SttProviderStreaming : IDisposable
 
     // Events
     public event EventHandler<string>? TranscriptionComplete; // Fired when complete transcription is ready
-    
+
     public SttProviderStreaming()
     {
     }

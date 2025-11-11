@@ -1,15 +1,6 @@
 ﻿using MinimalSileroVAD.Core;
 using Serilog;
 using Serilog.Events;
-using Serilog.Extensions.Logging;
-using SoundFlow.Abstracts.Devices;  // For AudioDevice, AudioCaptureDevice
-using SoundFlow.Backends.MiniAudio;  // For MiniAudioEngine
-using SoundFlow.Components;
-using SoundFlow.Enums;  // For SampleFormat
-using SoundFlow.Extensions.WebRtc.Apm.Modifiers;  // For WebRtcApmModifier
-using SoundFlow.Interfaces;
-using SoundFlow.Structs;  // For AudioFormat
-using System.Collections.Concurrent;
 
 namespace MinimalVoiceAgent;
 
