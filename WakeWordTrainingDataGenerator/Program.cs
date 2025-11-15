@@ -2,30 +2,17 @@
 using Accord.Math;
 using Microsoft.ML;
 using Microsoft.ML.Data;
-using Microsoft.ML.TorchSharp;
 using Microsoft.ML.Vision;
-using NAudio;
 using NAudio.Wave;
-using NAudio.Wave.SampleProviders;
 using Serilog;
 using Serilog.Events;
 using SixLabors.ImageSharp; // Used to convert Mel-Frequency Cepstral Coefficients (MFCC) feature data into grayscale PNG images for classification with ML.net
 using SixLabors.ImageSharp.PixelFormats;
-using SixLabors.ImageSharp.Processing;
-using SoundFlow;
-using SoundFlow.Interfaces;
-using SoundFlow.Modifiers;
-using SoundFlow.Providers;
-using SoundTouch.Net.NAudioSupport;
-using System.Collections.Generic;
-using System.IO;
-using System.Linq;
-using System.Threading.Tasks;
-using TorchSharp;
+
 
 namespace WakeWordTrainingDataGenerator;
 
-public static partial class Algos
+internal static class TrainingAlgos
 {
     public static void AddConsoleLogger()
     {
@@ -49,6 +36,34 @@ public static partial class Algos
         Log.Logger = serilogLogger;
         Log.Information("Serilog configured for minimal voice agent.");
     }
+
+    public static float[] ConvertPcmToFloat(ReadOnlySpan<byte> pcmBytes)
+    {
+        if (pcmBytes.Length % 2 != 0) throw new ArgumentException("PCM must be 16-bit aligned.", nameof(pcmBytes));
+        int numSamples = pcmBytes.Length / 2;
+        var floatSamples = new float[numSamples];
+        for (int i = 0; i < numSamples; i++)
+        {
+            short sample = BitConverter.ToInt16(pcmBytes.Slice(i * 2, 2));
+            floatSamples[i] = Math.Clamp(sample / 32767f, -1f, 1f);  // Signed 16-bit normalize with headroom
+        }
+        return floatSamples;
+    }
+
+    public static byte[] ConvertFloatToPcm(ReadOnlySpan<float> floatSamples)
+    {
+        int numSamples = floatSamples.Length;
+        var pcmBytes = new byte[numSamples * 2];
+        Span<byte> byteSpan = pcmBytes.AsSpan();
+        for (int i = 0; i < numSamples; i++)
+        {
+            short sample = (short)(Math.Clamp(floatSamples[i], -1f, 1f) * 32767f);
+            if (!BitConverter.TryWriteBytes(byteSpan.Slice(i * 2, 2), sample))
+                throw new InvalidOperationException($"Failed to encode sample {i}.");  // Rare: buffer overflow
+        }
+        return pcmBytes;
+    }
+
 }
 
 public class ImageData
@@ -59,254 +74,212 @@ public class ImageData
 
 public static class WakeWordDataGenerator
 {
-    private static readonly string[] SimilarWords = new[]
+    // TTS'd Alina positive command examples.
+    private static readonly string[] PositiveCommands = new[]
     {
-        "Elena", "Alena", "Lena", "Aline", "Arena", "Elina", "Aleena", "Allina",
-        "Alyna", "Malina", "Leena", "Aaliyah", "Adina", "Aliza", "Selena",
-        "Sabrina", "Katrina", "Serena", "Latina", "Medina"
+        "turn off the lights", "what's the time", "play some music", "set a timer for five minutes",
+        "open the front door", "read my emails", "call mom", "how's the weather today",
+        "book a flight to New York", "remind me about the meeting", "adjust the thermostat to 72",
+        "send a text to Sarah", "check my calendar for tomorrow", "play the news podcast",
+        "order pizza from Domino's", "find a recipe for pasta", "start a workout timer",
+        "pause the movie", "increase the volume", "switch to dark mode",
+        "tell me a joke", "summarize the day's news", "navigate to the nearest coffee shop",
+        "create a shopping list", "translate this to Spanish", "lock the smart door",
+        "dim the bedroom lights", "wake me up at seven", "queue up my playlist",
+        "scan for updates", "backup my photos", "print the document",
+        "reset the fitness tracker", "sync my devices", "arm the security system",
+        "what time is it?", "can you dim the screen?", "dim the screen.", "dim the screen brightness."
+        // Add 50+ more as needed, cycling voices and positions
     };
 
-    public static async Task GeneratePositiveClipsAsync(string wakeWord, string outputDir, int numClips = 5000, string? noiseDir = null, bool augmentSpeed = true)
+    // Loose-trigger training.
+    // TODO utilize this.
+    private static readonly string[] PositiveSimilarCommands = new[]
     {
-        Directory.CreateDirectory(outputDir);
-        var voices = TtsProviderStreaming.ListVoices().ToArray();  // Get supported voices as array
+        "Aleena, check the fridge temperature", "Elina, brew some coffee", "Aleena, lock the windows",
+        "Elina, read the latest headlines", "Aleena, play jazz music", "Elina, set alarm for noon",
+        "Aleena, dim the hallway light", "Elina, call the office", "Aleena, what's on Netflix",
+        "Elina, order groceries online", "Aleena, track my steps", "Elina, meditate with me",
+        // Expand with more similar-sounding prefixes (e.g., Alena) for loose triggering training
+        "Alena, turn on the fan", "Lena, close the curtains"
+    };
 
-        for (int i = 0; i < numClips; i++)
-        {
-            string voiceKey = voices[i % voices.Length];  // Cycle through voices
-            using var audioStream = await TtsProviderStreaming.TextToSpeechAsync(wakeWord, voiceKey, outputAsWav: true);
-            byte[] wavBytes = audioStream.ToArray();
+    private static readonly string[] NegativeSentences = new[]
+    {
+        "The quick brown fox jumps over the lazy dog", "I need to buy groceries tomorrow",
+        "Pass the salt please", "What's for dinner tonight", "Call Sarah later",
+        "The meeting starts at nine sharp", "I forgot my keys again", "Rain is forecast for afternoon",
+        "Pick up milk on the way home", "The cat scratched the couch", "Traffic was terrible today",
+        "Bake cookies for the party", "Charge the phone overnight", "Water the plants before leaving",
+        "Fold the laundry neatly", "Sweep the kitchen floor", "Recycle the old newspapers",
+        "Mow the lawn this weekend", "Fix the leaky faucet", "Paint the fence white",
+        "Organize the desk drawers", "Dust the shelves thoroughly", "Vacuum under the bed",
+        "Wash the car on Sunday", "Trim the hedges evenly", "Plant new flowers in the yard",
+        "Read that book you borrowed", "Watch the documentary tonight", "Listen to the radio show",
+        "Cook stir-fry for lunch", "Brew tea in the afternoon", "Slice the vegetables thinly",
+        "Boil pasta al dente", "Grill chicken for dinner", "Bake bread from scratch",
+        "Stir the soup gently", "Chop onions finely", "Peel the potatoes first",
+        "Mash the garlic cloves", "Season with herbs", "Simmer on low heat",
+        // Dissimilar/distant negatives (no Alina-like sounds)
+        "Quantum physics fascinates me", "Solve the puzzle quickly", "Debate the ethics deeply",
+        "Explore the ancient ruins", "Invent a new gadget", "Compose a symphony",
+        "Photograph the sunset", "Sculpt the clay model", "Paint the landscape vividly",
+        "Dance under the stars", "Sing a lullaby softly", "Whisper secrets quietly",
+        "Shout with joy loudly", "Laugh heartily together", "Cry rivers of tears",
+        "Run a marathon swiftly", "Swim laps endlessly", "Climb mountains boldly",
+        "Dive into the ocean", "Fly kites on windy days", "Sail boats across lakes"
+    };
 
-            // Validate TTS output
-            if (wavBytes.Length < 44) // Minimum WAV header size
-            {
-                Serilog.Log.Error($"Invalid TTS output for {wakeWord} with voice {voiceKey}: Too small ({wavBytes.Length} bytes)");
-                continue;
-            }
-            try
-            {
-                using var ms = new MemoryStream(wavBytes);
-                using var reader = new WaveFileReader(ms);
-                Serilog.Log.Information($"Valid TTS WAV for {wakeWord}_{i}: {reader.WaveFormat.SampleRate} Hz, Length: {reader.Length} bytes");
-            }
-            catch (Exception ex)
-            {
-                Serilog.Log.Error($"TTS validation failed for {wakeWord} with voice {voiceKey}: {ex.Message}");
-                continue;
-            }
-
-            // Apply augmentations if enabled
-            if (augmentSpeed || !string.IsNullOrEmpty(noiseDir))
-            {
-                wavBytes = AugmentAudio(wavBytes, augmentSpeed, noiseDir);
-            }
-
-            // Validate after augmentation (optional but recommended)
-            try
-            {
-                using var ms = new MemoryStream(wavBytes);
-                using var reader = new WaveFileReader(ms);
-                // No log here to avoid spam
-            }
-            catch (Exception ex)
-            {
-                Serilog.Log.Error($"Augmentation validation failed for {wakeWord}_{i}: {ex.Message}");
-                continue;
-            }
-
-            string clipPath = Path.Combine(outputDir, $"{wakeWord.ToLower()}_{i}.wav");
-            await File.WriteAllBytesAsync(clipPath, wavBytes);
-        }
-        Serilog.Log.Information($"Generated {numClips} positive '{wakeWord}' clips in {outputDir}");
-    }
-
-    public static async Task GenerateNegativeClipsAsync(string outputDir, int numClipsPerWord = 250, string? noiseDir = null, bool augmentSpeed = true)
+    public static async Task GeneratePositiveClipsAsync(string wakeWord, string outputDir, int numClips = 5000, string? noiseDir = null, bool augment = true)
     {
         Directory.CreateDirectory(outputDir);
         var voices = TtsProviderStreaming.ListVoices().ToArray();
+        int voicesCount = voices.Length;
 
-        int totalClips = 0;
-        foreach (var negativeWord in SimilarWords)
+        for (int i = 0; i < numClips; i++)
         {
-            for (int i = 0; i < numClipsPerWord; i++)
+            string voiceKey = voices[i % voicesCount];
+            string command = PositiveCommands[i % PositiveCommands.Length];
+
+            // Full utterance: Wake + random pause + command
+            using var wakeStream = await TtsProviderStreaming.TextToSpeechAsync(wakeWord, voiceKey, true);
+            byte[] wakeWav = wakeStream.ToArray();
+            byte[] wakePcm = Algos.ConvertWavToPcm(wakeWav, 16000);
+
+            using var cmdStream = await TtsProviderStreaming.TextToSpeechAsync(command, voiceKey, true);
+            byte[] cmdWav = cmdStream.ToArray();
+            byte[] cmdPcm = Algos.ConvertWavToPcm(cmdWav, 16000);
+
+            // Random pause: 200-1000ms silence
+            int pauseMs = 200 + (i % 4 * 200);  // 200, 400, 600, 800
+            byte[] pause = new byte[(16000 * pauseMs / 1000 * 2)];
+
+            // Random wake offset: 0-1500ms (for mid-embedding)
+            int offsetMs = (i / 5 % 4) * 500;  // 0, 500, 1000, 1500
+            int offsetBytes = (16000 * offsetMs / 1000 * 2);
+
+            // Total <7s: Wake + offset silence + pause + command
+            int totalBytes = Math.Min(offsetBytes + wakePcm.Length + pause.Length + cmdPcm.Length, 16000 * 6 * 2);  // 6s cap
+            byte[] clipPcm = new byte[totalBytes];
+
+            // Place components
+            int pos = offsetBytes;
+            Array.Copy(wakePcm, 0, clipPcm, pos, Math.Min(wakePcm.Length, totalBytes - pos)); pos += wakePcm.Length;
+            Array.Copy(pause, 0, clipPcm, pos, Math.Min(pause.Length, totalBytes - pos)); pos += pause.Length;
+            Array.Copy(cmdPcm, 0, clipPcm, pos, Math.Min(cmdPcm.Length, totalBytes - pos));
+
+            // Augment if enabled
+            if (augment && i % 3 != 0)  // 2/3 augmented
             {
-                string voiceKey = voices[(totalClips + i) % voices.Length];
-                using var audioStream = await TtsProviderStreaming.TextToSpeechAsync(negativeWord, voiceKey, outputAsWav: true);
-                byte[] wavBytes = audioStream.ToArray();
-
-                // Validate TTS output
-                if (wavBytes.Length < 44) // Minimum WAV header size
-                {
-                    Serilog.Log.Error($"Invalid TTS output for {negativeWord} with voice {voiceKey}: Too small ({wavBytes.Length} bytes)");
-                    continue;
-                }
-                try
-                {
-                    using var ms = new MemoryStream(wavBytes);
-                    using var reader = new WaveFileReader(ms);
-                    Serilog.Log.Information($"Valid TTS WAV for {negativeWord}_{i}: {reader.WaveFormat.SampleRate} Hz, Length: {reader.Length} bytes");
-                }
-                catch (Exception ex)
-                {
-                    Serilog.Log.Error($"TTS validation failed for {negativeWord} with voice {voiceKey}: {ex.Message}");
-                    continue;
-                }
-
-                if (augmentSpeed || !string.IsNullOrEmpty(noiseDir))
-                {
-                    wavBytes = AugmentAudio(wavBytes, augmentSpeed, noiseDir);
-                }
-
-                // Validate after augmentation (optional but recommended)
-                try
-                {
-                    using var ms = new MemoryStream(wavBytes);
-                    using var reader = new WaveFileReader(ms);
-                    // No log here to avoid spam
-                }
-                catch (Exception ex)
-                {
-                    Serilog.Log.Error($"Augmentation validation failed for {negativeWord}_{i}: {ex.Message}");
-                    continue;
-                }
-
-                string clipPath = Path.Combine(outputDir, $"{negativeWord.ToLower()}_{i}.wav");
-                await File.WriteAllBytesAsync(clipPath, wavBytes);
-                totalClips++;
+                clipPcm = AugmentAudio(clipPcm, noiseDir, speedFactor: 0.8 + (new Random(i).NextDouble() * 0.8), pitchShift: -2 + (new Random(i + 1).Next(5)), noiseLevel: 0.1);
             }
+
+            // Save WAV
+            byte[] wav = Algos.CreateWavFromPcm(clipPcm, 16000);
+            string filename = $"positive_long_{i:D5}.wav";
+            await File.WriteAllBytesAsync(Path.Combine(outputDir, filename), wav);
+
+            if (i % 500 == 0) Log.Information("Generated {i}/{numClips} long positives", i);
         }
-        Serilog.Log.Information($"Generated {totalClips} negative clips (similar to 'Alina') in {outputDir}");
     }
 
-    private static byte[] AugmentAudio(byte[] inputWav, bool augmentSpeed, string? noiseDir, int silenceMsBefore = 200, int silenceMsAfter = 200)
+    public static async Task GenerateNegativeClipsAsync(string outputDir, int numPerSentence = 250, string? noiseDir = null, bool augment = true)
     {
-        // Read the input WAV to get format and raw samples as float[]
-        float[] samples;
-        WaveFormat format;
-        using (var ms = new MemoryStream(inputWav))
-        using (var reader = new WaveFileReader(ms))
+        Directory.CreateDirectory(outputDir);
+        var voices = TtsProviderStreaming.ListVoices().ToArray();
+        int voicesCount = voices.Length;
+
+        for (int sentIdx = 0; sentIdx < NegativeSentences.Length; sentIdx++)
         {
-            format = reader.WaveFormat;
-            var sampleProvider = reader.ToSampleProvider();
-            samples = new float[reader.Length / format.BlockAlign];
-            sampleProvider.Read(samples, 0, samples.Length);
-        }
-
-        // Add leading silence
-        if (silenceMsBefore > 0)
-        {
-            int silenceSamples = (int)(format.SampleRate * silenceMsBefore / 1000.0) * format.Channels;
-            float[] leadingSilence = new float[silenceSamples];
-            samples = leadingSilence.Concat(samples).ToArray();
-        }
-
-        // Add trailing silence
-        if (silenceMsAfter > 0)
-        {
-            int silenceSamples = (int)(format.SampleRate * silenceMsAfter / 1000.0) * format.Channels;
-            float[] trailingSilence = new float[silenceSamples];
-            samples = samples.Concat(trailingSilence).ToArray();
-        }
-
-        // Speed augmentation (random 0.8x to 1.2x, pitch-preserving)
-        if (augmentSpeed)
-        {
-            var random = new Random();
-            float speedFactor = (float)(0.8 + random.NextDouble() * 0.4);  // 0.8 to 1.2
-
-            // Force to 16-bit PCM for SoundTouch
-            WaveFormat augmentationFormat = new WaveFormat(format.SampleRate, 16, format.Channels);
-
-            // Convert float[] to short[] (16-bit)
-            short[] shortSamples = new short[samples.Length];
-            for (int j = 0; j < samples.Length; j++)
+            string sentence = NegativeSentences[sentIdx];
+            for (int i = 0; i < numPerSentence; i++)
             {
-                shortSamples[j] = (short)(Math.Clamp(samples[j] * 32767f, -32768f, 32767f));
-            }
+                string voiceKey = voices[(sentIdx * numPerSentence + i) % voicesCount];
 
-            byte[] rawPcm = new byte[shortSamples.Length * 2];
-            Buffer.BlockCopy(shortSamples, 0, rawPcm, 0, rawPcm.Length);
+                using var stream = await TtsProviderStreaming.TextToSpeechAsync(sentence, voiceKey, true);
+                byte[] wav = stream.ToArray();
+                byte[] pcm = Algos.ConvertWavToPcm(wav, 16000);
 
-            using var rawStream = new RawSourceWaveStream(rawPcm, 0, rawPcm.Length, augmentationFormat);
-            var floatProvider = new Wave16ToFloatProvider(rawStream);
-            var soundTouchProvider = new SoundTouchWaveProvider(floatProvider);
-            soundTouchProvider.Tempo = speedFactor;
+                // Random length trim (2-6s)
+                int trimEndMs = 2000 + (new Random(i).Next(4000));
+                int trimEndBytes = Math.Min((16000 * trimEndMs / 1000 * 2), pcm.Length);
+                byte[] trimmedPcm = new byte[trimEndBytes];
+                Array.Copy(pcm, 0, trimmedPcm, 0, trimEndBytes);
 
-            var sampleProvider = soundTouchProvider.ToSampleProvider();
-
-            // Read processed samples
-            var processedSamples = new List<float>();
-            float[] buffer = new float[1024 * format.Channels];  // Adjust buffer for channels
-            int read;
-            while ((read = sampleProvider.Read(buffer, 0, buffer.Length)) > 0)
-            {
-                processedSamples.AddRange(buffer.AsSpan(0, read).ToArray());
-            }
-            samples = processedSamples.ToArray();
-
-            // Update format to 16-bit PCM after augmentation
-            format = augmentationFormat;
-        }
-
-        // Write samples back to WAV temporarily for noise mixing (or further processing)
-        byte[] tempWav;
-        using (var tempMs = new MemoryStream())
-        {
-            using (var writer = new WaveFileWriter(tempMs, format))
-            {
-                writer.WriteSamples(samples, 0, samples.Length);
-            }  // Dispose writer to flush header
-            tempWav = tempMs.ToArray();
-        }
-        inputWav = tempWav;
-
-        // Noise addition (if noiseDir provided, mix random noise file at -20dB)
-        if (!string.IsNullOrEmpty(noiseDir))
-        {
-            var noiseFiles = Directory.GetFiles(noiseDir, "*.wav");
-            if (noiseFiles.Length > 0)
-            {
-                var random = new Random();
-                string noisePath = noiseFiles[random.Next(noiseFiles.Length)];
-                using var noiseReader = new WaveFileReader(noisePath);
-
-                // Resample noise to match if needed
-                IWaveProvider finalNoiseReader;
-                if (noiseReader.WaveFormat.SampleRate != format.SampleRate || !noiseReader.WaveFormat.Equals(format))
+                if (augment && i % 3 != 0)
                 {
-                    finalNoiseReader = new MediaFoundationResampler(noiseReader, format);
-                }
-                else
-                {
-                    finalNoiseReader = noiseReader;
+                    trimmedPcm = AugmentAudio(trimmedPcm, noiseDir, speedFactor: 0.9 + (new Random(i).NextDouble() * 0.4), pitchShift: -1 + (new Random(i + 1).Next(3)), noiseLevel: 0.15);
                 }
 
-                using var signalMs = new MemoryStream(inputWav);
-                using var signalReader = new WaveFileReader(signalMs);
+                byte[] outWav = Algos.CreateWavFromPcm(trimmedPcm, 16000);
+                string filename = $"negative_long_{sentIdx:D2}_{i:D3}.wav";
+                await File.WriteAllBytesAsync(Path.Combine(outputDir, filename), outWav);
+            }
+        }
+    }
 
-                // Mix: signal + 0.1 * noise (-20dB)
-                var mixer = new MixingSampleProvider(new[] { signalReader.ToSampleProvider(), new VolumeSampleProvider(finalNoiseReader.ToSampleProvider()) { Volume = 0.1f } });
+    public static byte[] AugmentAudio(byte[] pcm16k, string? noiseDir, double speedFactor = 1.0, int pitchShift = 0, double noiseLevel = 0.1)
+    {
+        if (pcm16k.Length == 0) return pcm16k;
 
-                using var tempMs = new MemoryStream();
-                using (var writer = new WaveFileWriter(tempMs, mixer.WaveFormat))
+        try
+        {
+            // Step 1: Load PCM as float samples (your fixed TrainingAlgos.ConvertPcmToFloat)
+            float[] inputSamples = TrainingAlgos.ConvertPcmToFloat(pcm16k.AsSpan());
+
+            // Step 2: Apply speed/pitch with SoundTouchProcessor
+            var soundTouch = new SoundTouch.SoundTouchProcessor();
+            soundTouch.SampleRate = 16000;
+            soundTouch.Channels = 1;  // Mono
+            soundTouch.PutSamples(inputSamples, inputSamples.Length);
+
+            // Set parameters
+            soundTouch.Tempo = (float)speedFactor;  // e.g., 0.9 for slower
+            soundTouch.Pitch = (float)Math.Pow(2, pitchShift / 12.0);  // Semitones
+
+            // Flush and read processed samples (use List for dynamic sizing)
+            soundTouch.Flush();
+            var outputSamplesList = new List<float>(inputSamples.Length * 2);  // Initial capacity with headroom
+            const int chunkSize = 1024;
+            float[] chunk = new float[chunkSize];
+            while (true)
+            {
+                int samplesReceived = soundTouch.ReceiveSamples(chunk, chunkSize);
+                if (samplesReceived == 0) break;
+                outputSamplesList.AddRange(chunk.Take(samplesReceived));
+            }
+            float[] outputSamples = outputSamplesList.ToArray();
+
+            // Step 3: Convert back to PCM bytes (your fixed TrainingAlgos.ConvertFloatToPcm)
+            byte[] augmentedPcm = TrainingAlgos.ConvertFloatToPcm(outputSamples.AsSpan());
+
+            // Step 4: Mix noise if requested
+            if (noiseLevel > 0 && !string.IsNullOrEmpty(noiseDir) && augmentedPcm.Length > 0)
+            {
+                var noiseFiles = Directory.GetFiles(noiseDir, "*.wav").Where(f => new FileInfo(f).Length < 1000000).ToArray();
+                if (noiseFiles.Length > 0)
                 {
-                    float[] buffer = new float[1024 * format.Channels];
-                    int read;
-                    while ((read = mixer.Read(buffer, 0, buffer.Length)) > 0)
+                    byte[] noisePcm = Algos.ConvertWavToPcm(File.ReadAllBytes(noiseFiles[new Random().Next(noiseFiles.Length)]), 16000);
+                    if (noisePcm.Length > 0)
                     {
-                        writer.WriteSamples(buffer, 0, read);
+                        float[] augFloat = TrainingAlgos.ConvertPcmToFloat(augmentedPcm.AsSpan());
+                        float[] noiseFloat = TrainingAlgos.ConvertPcmToFloat(noisePcm.AsSpan());
+                        for (int j = 0; j < augFloat.Length; j++)
+                        {
+                            augFloat[j] += (float)(noiseFloat[j % noiseFloat.Length] * noiseLevel);
+                        }
+                        augmentedPcm = TrainingAlgos.ConvertFloatToPcm(augFloat.AsSpan());  // Reuse your fixed version
                     }
-                }  // Dispose writer here to update header
-                inputWav = tempMs.ToArray();
-
-                if (finalNoiseReader != noiseReader)
-                {
-                    //finalNoiseReader.Dispose();
                 }
             }
-        }
 
-        return inputWav;
+            return augmentedPcm;
+        }
+        catch (Exception ex)
+        {
+            Log.Error(ex, "Audio augmentation failed; returning original");
+            return pcm16k;  // Fallback
+        }
     }
 
     public static async Task GenerateFeaturesAsync(string positiveDir, string negativeDir, string featuresDir, int fixedFrames = 100, int coeffCount = 13)
@@ -539,9 +512,9 @@ public static class Program
         }
     }
 
-    public static void Main(string[] args)
+    public async static Task Main(string[] args)
     {
-        Algos.AddConsoleLogger();
+        TrainingAlgos.AddConsoleLogger();
         Log.Information($"{Environment.CurrentDirectory}");
 
         if (args.Length < 3)
@@ -550,16 +523,8 @@ public static class Program
             return;
         }
 
-        //RunTraining(args);
-
-        // run inference
-        string featuresDir = "features";
-        string imagePath = Path.Combine(featuresDir, "positive", "alina_0.png");
-        Predict("wakeword_model.zip", featuresDir, imagePath);
-        imagePath = Path.Combine(featuresDir, "positive", "alina_3869.png");
-        Predict("wakeword_model.zip", featuresDir, imagePath);
-        imagePath = Path.Combine(featuresDir, "negative", "aleena_212.png");
-        Predict("wakeword_model.zip", featuresDir, imagePath);
+        // Training may take a couple hours, can run with 'Alina goodaudio badaudio'
+        await RunTraining(args);
     }
 
     private static async Task RunTraining(string[] args)

@@ -1,7 +1,30 @@
 ﻿using MinimalSileroVAD.Core;
+using NAudio.Wave;
 using Serilog;
 
 namespace MinimalVoiceAgent;
+
+public static partial class Algos
+{
+    /// <summary>
+    /// Helper: Save full VAD segment to WAV (unchanged from before).
+    /// </summary>
+    public static void SaveFullSegment(byte[] pcmBytes, int sampleRate)
+    {
+        var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
+        var filename = $"debug_full_segment_{timestamp}.wav";
+        var filepath = Path.Combine("debug_audio", filename);
+
+        Directory.CreateDirectory(Path.GetDirectoryName(filepath) ?? ".");
+
+        using var outputStream = new FileStream(filepath, FileMode.Create);
+        using var writer = new WaveFileWriter(outputStream, new WaveFormat(sampleRate, 16, 1));
+        writer.Write(pcmBytes, 0, pcmBytes.Length);
+
+        Log.Debug("Saved full debug segment ({Length} bytes) to {Filepath}", pcmBytes.Length, filepath);
+    }
+
+}
 
 public class VoiceAgentCore : IAsyncDisposable
 {
@@ -115,7 +138,7 @@ public class VoiceAgentCore : IAsyncDisposable
                 if (_wakeWord != null && _wakeDetector != null)
                 {
                     var fullPcm = pcmStream.ToArray(); // Full segment bytes
-                    bool isWake = _wakeDetector.IsWakeWord(fullPcm); // Prefix auto-sliced
+                    bool isWake = _wakeDetector.IsWakeWord(fullPcm);
                     if (!isWake)
                     {
                         Log.Information("WWD: Wake word not detected in segment; skipping STT.");
@@ -188,18 +211,8 @@ public class VoiceAgentCore : IAsyncDisposable
     {
         transcription = transcription.Trim();
 
-        if (!string.IsNullOrEmpty(_wakeWord) &&
-            !transcription.StartsWith(_wakeWord, StringComparison.OrdinalIgnoreCase))
-        {
-            Log.Information($"VoiceAgentCore: Ignoring transcription without wake word '{_wakeWord}': '{transcription}'");
-            return;
-        }
-
-        // Remove wake word if present
-        if (!string.IsNullOrEmpty(_wakeWord))
-        {
-            transcription = transcription.Substring(_wakeWord.Length).Trim();
-        }
+        // Check for Wake-word appearing in transcription trimmed, audio is now
+        // pre-processed before STT via custom model.
 
         if (!_doUseInterruption && _audioPacer.IsAudioPlaying)
         {
@@ -432,7 +445,8 @@ public class VoiceAgentCore : IAsyncDisposable
                 _audioPacer,
                 _doUseInterruption,
                 _wakeWord,
-                _volumeLoweringFactor);
+                _volumeLoweringFactor,
+                new("models/wakeword_model.zip"));
 
             if (_audioResponseHandler != null)
             {

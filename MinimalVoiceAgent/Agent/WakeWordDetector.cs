@@ -62,7 +62,7 @@ public static class WakeWordUtils
     /// </summary>
     public static byte[] ExtractMfccAndGeneratePng(byte[] pcmBytes)  // Input: Raw 16kHz PCM prefix
     {
-        // Step 1: Convert 16-bit PCM bytes to float[] (reuse your existing helper)
+        // Step 1: Convert 16-bit PCM bytes to float[]
         float[] floatSamples = Algos.ConvertPcmToFloat(pcmBytes.AsSpan());
 
         // Step 2: Load as Signal (mono, float format)
@@ -110,8 +110,6 @@ public class WakeWordDetector : IDisposable
 {
     private readonly MLContext _mlContext = new();
     private readonly ITransformer _model;
-    private readonly int _targetDurationMs = 800;  // Configurable via ctor if needed
-    private readonly int _sampleRate = 16000;
 
     public WakeWordDetector(string modelPath)
     {
@@ -129,18 +127,8 @@ public class WakeWordDetector : IDisposable
     {
         try
         {
-            // Step 1: Slice/pad to target prefix (800ms @ 16kHz = 12800 samples = 25600 bytes)
-            int targetSamples = _sampleRate * _targetDurationMs / 1000;
-            int targetBytes = targetSamples * 2;  // 16-bit
-            byte[] prefixBytes = new byte[Math.Max(pcm16kHzMono.Length, targetBytes)];
-            Array.Copy(pcm16kHzMono, prefixBytes, Math.Min(pcm16kHzMono.Length, targetBytes));
-            if (pcm16kHzMono.Length < targetBytes)
-            {
-                Log.Debug("Padded audio prefix to {TargetBytes} bytes (from {ActualBytes})", targetBytes, pcm16kHzMono.Length);
-            }
-
-            // Step 2: Extract MFCC features (match training: 13 coeffs, Hamming window)
-            byte[] imageBytes = WakeWordUtils.ExtractMfccAndGeneratePng(prefixBytes);
+            // Step 1: Extract MFCC features (match training: 13 coeffs, Hamming window)
+            byte[] imageBytes = WakeWordUtils.ExtractMfccAndGeneratePng(pcm16kHzMono);
 
             if (imageBytes.Length == 0)
             {
@@ -148,12 +136,11 @@ public class WakeWordDetector : IDisposable
                 return false;
             }
 
-            // Step 3: Predict using in-memory byte[] (matches post-LoadRawImageBytes schema)
+            // Step 2: Predict using in-memory byte[] (matches post-LoadRawImageBytes schema)
             var result = WakeWordUtils.PerformPrediction(_mlContext, _model, imageBytes);
 
             bool isPositive = result.PredictedLabel == "positive";
-            Log.Information("Wake detection on {Duration}ms prefix: {Label}",
-                _targetDurationMs, isPositive ? "POSITIVE" : "NEGATIVE");
+            Log.Information("Wake detection: {Label}", isPositive ? "POSITIVE" : "NEGATIVE");
             return isPositive;
         }
         catch (Exception ex)

@@ -59,6 +59,9 @@
 	</ItemGroup>
 
   <ItemGroup>
+    <None Update="models\wakeword_model.zip">
+      <CopyToOutputDirectory>PreserveNewest</CopyToOutputDirectory>
+    </None>
     <None Update="profiles\personal.json">
       <CopyToOutputDirectory>Always</CopyToOutputDirectory>
     </None>

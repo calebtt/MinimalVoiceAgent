@@ -119,7 +119,6 @@ public static class TtsProviderStreaming
     private static readonly ConcurrentDictionary<string, KokoroVoice> _voiceCache = new();
     private static readonly string _modelPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "kokoro.onnx");
     private static readonly Stopwatch _perfTimer = new(); // For RTF logging
-    private const int MaxConcurrency = 3; // Limit concurrent segments for GPU/memory (configurable)
 
     public const string DefaultVoiceKey = "af_heart"; // Natural American English
 
