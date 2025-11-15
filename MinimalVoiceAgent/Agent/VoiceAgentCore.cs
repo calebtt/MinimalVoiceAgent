@@ -9,6 +9,7 @@ public class VoiceAgentCore : IAsyncDisposable
     private readonly LlmChat _llmChat;
     private readonly TtsStreamer _ttsStreamer;
     private readonly AudioPacer _audioPacer;
+    private readonly WakeWordDetector? _wakeDetector;
 
     private readonly float _volumeLoweringFactor;
     private readonly string? _wakeWord;
@@ -35,7 +36,8 @@ public class VoiceAgentCore : IAsyncDisposable
         AudioPacer audioPacer,
         bool doUseInterruption,
         string? wakeWord,
-        float volumeLoweringFactor)
+        float volumeLoweringFactor,
+        WakeWordDetector? wakeDetector = null)
     {
         _streamingSttClient = streamingSttClient ?? throw new ArgumentNullException(nameof(streamingSttClient));
         _llmChat = llmChat ?? throw new ArgumentNullException(nameof(llmChat));
@@ -44,6 +46,7 @@ public class VoiceAgentCore : IAsyncDisposable
         _doUseInterruption = doUseInterruption;
         _wakeWord = wakeWord;
         _volumeLoweringFactor = volumeLoweringFactor;
+        _wakeDetector = wakeDetector;
 
         _ttsStreamer.OnAudioChunkReady += (sender, chunk) => OnAudioReplyReady?.Invoke(chunk!);
 
@@ -107,6 +110,17 @@ public class VoiceAgentCore : IAsyncDisposable
                     _ignoreCurrentSegment = false;
                     Log.Information("VAD: Ignored speech segment that started during playback (interruption disabled).");
                     return;
+                }
+
+                if (_wakeWord != null && _wakeDetector != null)
+                {
+                    var fullPcm = pcmStream.ToArray(); // Full segment bytes
+                    bool isWake = _wakeDetector.IsWakeWord(fullPcm); // Prefix auto-sliced
+                    if (!isWake)
+                    {
+                        Log.Information("WWD: Wake word not detected in segment; skipping STT.");
+                        return;
+                    }
                 }
 
                 _streamingSttClient.ProcessAudioChunkAsync(pcmStream).Wait();

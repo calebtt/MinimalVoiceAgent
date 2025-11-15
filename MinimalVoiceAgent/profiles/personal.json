@@ -10,6 +10,36 @@
     "Temperature": 0.1,
     "Tools": [
       {
+        "name": "set_screen_dimming",
+        "description": "Set the screen dimming level (0.1 to 1.0 for 10% to 100% dimness reduction). Use 0.0 to turn off. Displays brief label on change.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "level": {
+              "type": "number",
+              "description": "Dimming level (0.0-1.0; 0.0 for off)",
+              "required": true
+            }
+          }
+        }
+      },
+      {
+        "name": "get_screen_dimming",
+        "description": "Retrieve the current screen dimming level (0.0-1.0). Returns 0.0 if off.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
+        "name": "turn_off_screen_dimming",
+        "description": "Turn off screen dimming completely.",
+        "parameters": {
+          "type": "object",
+          "properties": {}
+        }
+      },
+      {
         "name": "get_current_datetime",
         "description": "Retrieve the current local date and time, useful for scheduling or time-based queries.",
         "parameters": {
@@ -255,6 +285,21 @@
     ],
     "ToolInstructions": [
       {
+        "toolName": "set_screen_dimming",
+        "guidance": "Invoke on 'dim screen to X%' or similar. Use level as fraction (e.g., 0.5 for 50%). Confirm: 'Screen dimmed to X%. Done.' If off requested, use level=0.0.",
+        "priority": 1
+      },
+      {
+        "toolName": "get_screen_dimming",
+        "guidance": "Use for 'what's the dimming level?' queries. Respond with level (e.g., 'Dimming at 50%.').",
+        "priority": 2
+      },
+      {
+        "toolName": "turn_off_screen_dimming",
+        "guidance": "Invoke on 'turn off dimming'. Confirm: 'Dimming off—screen restored.'",
+        "priority": 1
+      },
+      {
         "toolName": "lower_volume",
         "guidance": "Invoke immediately on 'lower volume' or similar. Confirm: 'Volume lowered by 10%. Done.'",
         "priority": 1
@@ -311,6 +356,11 @@
       }
     ],
     "Rules": [
+      {
+        "id": "dimming-priority",
+        "description": "DIMMING: For screen dim/brightness commands, invoke set_screen_dimming or turn_off_screen_dimming immediately. Combine with get_screen_dimming for queries.",
+        "appliesTo": [ "set_screen_dimming", "get_screen_dimming", "turn_off_screen_dimming" ]
+      },
       {
         "id": "system-first",
         "description": "SYSTEM FIRST: For volume/mute, invoke relevant tool immediately—e.g., 'lower volume' → lower_volume.",

@@ -1,3 +1,6 @@
 [submodule "MinimalSileroVad"]
 	path = MinimalSileroVad
 	url = https://github.com/calebtt/MinimalSileroVad.git
+[submodule "soundtouch.net"]
+	path = soundtouch.net
+	url = https://github.com/calebtt/soundtouch.net.git
