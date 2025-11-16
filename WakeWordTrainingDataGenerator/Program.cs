@@ -22,11 +22,11 @@ internal static class TrainingAlgos
             .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
             .MinimumLevel.Override("System", LogEventLevel.Warning)
             .WriteTo.Console(
-                restrictedToMinimumLevel: LogEventLevel.Debug,
+                restrictedToMinimumLevel: LogEventLevel.Information,
                 outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}")
             .WriteTo.File(
                 path: "minimal_voice_agent_log.txt",
-                restrictedToMinimumLevel: LogEventLevel.Debug,
+                restrictedToMinimumLevel: LogEventLevel.Information,
                 rollingInterval: RollingInterval.Infinite,
                 rollOnFileSizeLimit: true,
                 fileSizeLimitBytes: 100 * 1024 * 1024, // 100 MB
@@ -179,7 +179,7 @@ public static class WakeWordDataGenerator
             string filename = $"positive_long_{i:D5}.wav";
             await File.WriteAllBytesAsync(Path.Combine(outputDir, filename), wav);
 
-            if (i % 500 == 0) Log.Information("Generated {i}/{numClips} long positives", i);
+            if (i % 500 == 0) Log.Information("Generated {i}/{numClips} long positives", i, numClips);
         }
     }
 
@@ -467,6 +467,35 @@ public static class WakeWordDataGenerator
         Serilog.Log.Information($"Model saved to {modelPath}");
     }
 
+    // Standalone test method
+    //public static void TestModel(string modelPath, string featuresDir, string[] testWavPaths, string[] expectedLabels)
+    //{
+    //    var mlContext = new MLContext();
+    //    ITransformer model = mlContext.Model.Load(modelPath, out _);
+
+    //    int correct = 0;
+    //    for (int i = 0; i < testWavPaths.Length; i++)
+    //    {
+    //        // Generate MFCC PNG for this WAV (reuse your ComputeMfcc + CreateImageFromMfcc + save)
+    //        string tempPng = Path.Combine(Path.GetTempPath(), $"test_{i}.png");
+    //        var mfcc = ComputeMfcc(testWavPaths[i], 13);
+    //        var padded = PadOrTrim(mfcc, 100);
+    //        var image = CreateImageFromMfcc(padded);
+    //        image.SaveAsPng(tempPng);
+
+    //        // Predict (as in your existing Predict method)
+    //        string relativePath = $"dummy_dir/{Path.GetFileName(tempPng)}"; // Hack: Use a temp subdir
+    //                                                                        // ... (copy your prediction logic)
+    //        var pred = /* extracted PredictedLabel */;
+
+    //        Log.Information($"Test {i}: {testWavPaths[i]} -> Predicted: {pred} (Expected: {expectedLabels[i]})");
+    //        if (pred == expectedLabels[i]) correct++;
+
+    //        File.Delete(tempPng); // Cleanup
+    //    }
+    //    Log.Information($"Overall: {correct}/{testWavPaths.Length} correct ({correct * 100.0 / testWavPaths.Length:F1}%)");
+    //}
+
 }
 
 public static class Program
@@ -519,7 +548,7 @@ public static class Program
 
         if (args.Length < 3)
         {
-            Serilog.Log.Error("Usage: WakeWordTrainingDataGenerator <wakeWord> <positiveDir> <negativeDir> [numPositive=5000] [numNegativePerWord=250] [noiseDir]");
+            Serilog.Log.Error("Usage: WakeWordTrainingDataGenerator <wakeWord> <positiveDir> <negativeDir> <noiseDir> [numPositive=5000] [numNegativePerWord=250]");
             return;
         }
 
@@ -532,9 +561,12 @@ public static class Program
         string wakeWord = args[0];
         string positiveDir = args[1];
         string negativeDir = args[2];
-        int numPositive = args.Length >= 4 ? int.Parse(args[3]) : 5000;
-        int numNegativePerWord = args.Length >= 5 ? int.Parse(args[4]) : 250;
-        string? noiseDir = args.Length >= 6 ? args[5] : null;
+        string noiseDir = args[3];
+        int numPositive = args.Length >= 5 ? int.Parse(args[4]) : 5000;
+        int numNegativePerWord = args.Length >= 6 ? int.Parse(args[5]) : 250;
+
+        Log.Information("Loaded with args: {wakeWord} {positiveDir} {negativeDir} {noiseDir} numPositive={numPositive} numNegativePerWord={numNegativePerWord}",
+            wakeWord, positiveDir, negativeDir, noiseDir, numPositive, numNegativePerWord);
 
         // Generate positives
         await WakeWordDataGenerator.GeneratePositiveClipsAsync(wakeWord, positiveDir, numPositive, noiseDir);

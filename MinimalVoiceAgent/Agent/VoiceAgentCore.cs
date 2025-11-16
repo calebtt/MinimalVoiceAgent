@@ -24,6 +24,24 @@ public static partial class Algos
         Log.Debug("Saved full debug segment ({Length} bytes) to {Filepath}", pcmBytes.Length, filepath);
     }
 
+    /// <summary>
+    /// Helper: Save full VAD segment to WAV (unchanged from before).
+    /// </summary>
+    public static async Task SaveFullSegmentAsync(byte[] pcmBytes, int sampleRate)
+    {
+        var timestamp = DateTime.Now.ToString("yyyyMMdd_HHmmss_fff");
+        var filename = $"debug_full_segment_{timestamp}.wav";
+        var filepath = Path.Combine("debug_audio", filename);
+
+        Directory.CreateDirectory(Path.GetDirectoryName(filepath) ?? ".");
+
+        using var outputStream = new FileStream(filepath, FileMode.Create);
+        using var writer = new WaveFileWriter(outputStream, new WaveFormat(sampleRate, 16, 1));
+        await writer.WriteAsync(pcmBytes, 0, pcmBytes.Length);
+
+        Log.Debug("Saved full debug segment ({Length} bytes) to {Filepath}", pcmBytes.Length, filepath);
+    }
+
 }
 
 public class VoiceAgentCore : IAsyncDisposable
@@ -144,9 +162,12 @@ public class VoiceAgentCore : IAsyncDisposable
                         Log.Information("WWD: Wake word not detected in segment; skipping STT.");
                         return;
                     }
+                    // Save activation clip
+                    _ = Algos.SaveFullSegmentAsync(fullPcm, 16000);
                 }
 
-                _streamingSttClient.ProcessAudioChunkAsync(pcmStream).Wait();
+                // Disabled audio processing to avoid LLM calls during testing.
+                //_streamingSttClient.ProcessAudioChunkAsync(pcmStream).Wait();
             };
 
             Log.Information("VoiceAgentCore initialized.");

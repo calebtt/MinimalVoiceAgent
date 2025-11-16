@@ -198,7 +198,7 @@ public static class TtsProviderStreaming
         }, ct).ConfigureAwait(false);
         _perfTimer.Stop();
         var rtf = (double)text.Length / _perfTimer.Elapsed.TotalSeconds; // Rough RTF estimate (chars/sec; >100 on GPU)
-        Log.Information("TTS synthesis RTF: {Rtf:F2} chars/sec ({Elapsed}s for {Length} chars)", rtf, _perfTimer.Elapsed.TotalSeconds, text.Length);
+        Log.Debug("TTS synthesis RTF: {Rtf:F2} chars/sec ({Elapsed}s for {Length} chars)", rtf, _perfTimer.Elapsed.TotalSeconds, text.Length);
 
         if (rawPcmBytes.Length == 0)
         {
