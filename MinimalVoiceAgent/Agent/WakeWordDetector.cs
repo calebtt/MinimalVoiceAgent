@@ -25,6 +25,9 @@ public class Prediction
 {
     [ColumnName("PredictedLabel")]
     public string PredictedLabel { get; set; } = string.Empty;
+
+    [ColumnName("Score")]
+    public float[] Score { get; set; } = Array.Empty<float>();  // [neg_prob, pos_prob]
 }
 
 public static class WakeWordUtils
@@ -110,6 +113,7 @@ public class WakeWordDetector : IDisposable
 {
     private readonly MLContext _mlContext = new();
     private readonly ITransformer _model;
+    private const float ConfidenceThreshold = 0.75f;  // Tune: 0.7-0.8 for FP reduction
 
     public WakeWordDetector(string modelPath)
     {
@@ -139,8 +143,10 @@ public class WakeWordDetector : IDisposable
             // Step 2: Predict using in-memory byte[] (matches post-LoadRawImageBytes schema)
             var result = WakeWordUtils.PerformPrediction(_mlContext, _model, imageBytes);
 
-            bool isPositive = result.PredictedLabel == "positive";
-            Log.Information("Wake detection: {Label}", isPositive ? "POSITIVE" : "NEGATIVE");
+            float posProb = result.Score.Length > 1 ? result.Score[1] : 0f;  // Positive class prob
+            bool isPositive = posProb > ConfidenceThreshold;
+
+            Log.Information("Wake detection: {Label} (conf: {Prob:F3})", isPositive ? "POSITIVE" : "NEGATIVE", posProb);
             return isPositive;
         }
         catch (Exception ex)

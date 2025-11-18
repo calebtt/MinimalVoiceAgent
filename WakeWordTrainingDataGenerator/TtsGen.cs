@@ -1,5 +1,6 @@
 ﻿using KokoroSharp;
 using KokoroSharp.Core;
+using KokoroSharp.Processing;
 using KokoroSharp.Utilities;
 using Microsoft.ML.OnnxRuntime;
 using NAudio.Codecs;
@@ -27,14 +28,34 @@ public static partial class Algos
             throw new ArgumentException("Raw PCM must be even length for 16-bit samples.", nameof(rawPcmBytes));
         }
 
-        var format = new WaveFormat(sampleRate, 16, 1); // 22kHz mono 16-bit PCM
+        var format = new WaveFormat(sampleRate, 16, 1); // mono 16-bit PCM
         using var ms = new MemoryStream();
         using (var writer = new WaveFileWriter(ms, format))
         {
             writer.Write(rawPcmBytes, 0, rawPcmBytes.Length); // Explicit byte[] overload for compatibility
         }
         var wavBytes = ms.ToArray();
-        Log.Debug("Generated WAV header: {Length} bytes (fmt chunk present)", wavBytes.Length);
+        return wavBytes;
+    }
+
+    /// <summary>
+    /// Creates a WAV file from raw 16-bit mono PCM bytes using NAudio's WaveFileWriter.
+    /// Ensures valid RIFF header, fmt chunk, and data alignment for NAudio compatibility.
+    /// </summary>
+    public static async Task<byte[]> CreateWavFromPcmAsync(byte[] rawPcmBytes, int sampleRate)
+    {
+        if (rawPcmBytes.Length % 2 != 0)
+        {
+            throw new ArgumentException("Raw PCM must be even length for 16-bit samples.", nameof(rawPcmBytes));
+        }
+
+        var format = new WaveFormat(sampleRate, 16, 1); // mono 16-bit PCM
+        using var ms = new MemoryStream();
+        using (var writer = new WaveFileWriter(ms, format))
+        {
+            await writer.WriteAsync(rawPcmBytes, 0, rawPcmBytes.Length); // Explicit byte[] overload for compatibility
+        }
+        var wavBytes = ms.ToArray();
         return wavBytes;
     }
 
@@ -125,7 +146,7 @@ public static class TtsProviderStreaming
     /// <summary>
     /// Ensures initialized (internal async).
     /// </summary>
-    private static async Task EnsureInitializedAsync(CancellationToken ct)
+    public static async Task InitializeAsync(CancellationToken ct)
     {
         await _initLock.WaitAsync(ct).ConfigureAwait(false);
         try
@@ -175,6 +196,7 @@ public static class TtsProviderStreaming
         string text,
         string? voiceKey = null,
         bool outputAsWav = false,
+        int outputSampleRate = 22050,
         CancellationToken ct = default)
     {
         if (string.IsNullOrWhiteSpace(text))
@@ -182,45 +204,28 @@ public static class TtsProviderStreaming
             throw new ArgumentException("Text cannot be null or empty.", nameof(text));
         }
 
-        voiceKey ??= DefaultVoiceKey;
-
-        await EnsureInitializedAsync(ct).ConfigureAwait(false);
-
         voiceKey = voiceKey ?? DefaultVoiceKey;
         var voice = GetOrCacheVoice(voiceKey);
 
-        // Synthesize to raw PCM bytes (async via Task.Run for sync method; DIP: Delegates to Algos for processing)
-        _perfTimer.Restart();
-        byte[] rawPcmBytes = await Task.Run(() =>
-        {
-            ct.ThrowIfCancellationRequested();
-            return _synthesizer!.Synthesize(text, voice); // Sync method returns byte[] raw PCM (22kHz 16-bit mono; GPU-accelerated if enabled)
-        }, ct).ConfigureAwait(false);
-        _perfTimer.Stop();
-        var rtf = (double)text.Length / _perfTimer.Elapsed.TotalSeconds; // Rough RTF estimate (chars/sec; >100 on GPU)
-        Log.Debug("TTS synthesis RTF: {Rtf:F2} chars/sec ({Elapsed}s for {Length} chars)", rtf, _perfTimer.Elapsed.TotalSeconds, text.Length);
+        // Synthesize to raw PCM bytes
+        //var config = new KokoroTTSPipelineConfig();
+        byte[] rawPcmBytes = await _synthesizer!.SynthesizeAsync(text, voice);
 
         if (rawPcmBytes.Length == 0)
         {
             throw new InvalidOperationException("Synthesis returned empty PCM data.");
         }
-
-        byte[] outputBytes;
+        
         if (outputAsWav)
         {
-            outputBytes = Algos.CreateWavFromPcm(rawPcmBytes, 22050); // Full WAV with valid fmt chunk
+            var outputBytes = await Algos.CreateWavFromPcmAsync(rawPcmBytes, outputSampleRate); // Full WAV with valid fmt chunk
             Log.Debug($"Synthesized to WAV: {outputBytes.Length} bytes");
-        }
-        else
-        {
-            // Create temp WAV for AudioAlgos pipeline (ensures fmt chunk for NAudio)
-            var tempWavBytes = Algos.CreateWavFromPcm(rawPcmBytes, 22050);
-            byte[] pcm8kHz = Algos.ConvertWavToPcm(tempWavBytes, 8000);
-            outputBytes = Algos.EncodePcmToPcmuWithNAudio(pcm8kHz);
-            Log.Debug($"Synthesized and converted to 8kHz PCMU: {outputBytes.Length} bytes");
+            var ms = new MemoryStream(outputBytes);
+            ms.Position = 0;
+            return ms;        
         }
 
-        var stream = new MemoryStream(outputBytes);
+        var stream = new MemoryStream(rawPcmBytes);
         stream.Position = 0; // Reset for reading
         return stream;
     }
