@@ -1,7 +1,7 @@
 ﻿using MinimalSileroVAD.Core;
 using NAudio.Wave;
 using Serilog;
-
+using WakeWordTrainingDataGenerator;
 namespace MinimalVoiceAgent;
 
 public static partial class Algos
@@ -156,7 +156,7 @@ public class VoiceAgentCore : IAsyncDisposable
                 if (_wakeWord != null && _wakeDetector != null)
                 {
                     var fullPcm = pcmStream.ToArray(); // Full segment bytes
-                    bool isWake = _wakeDetector.IsWakeWord(fullPcm);
+                    var (isWake, conf) = _wakeDetector.IsWakeWord(fullPcm);
                     if (!isWake)
                     {
                         Log.Information("WWD: Wake word not detected in segment; skipping STT.");
