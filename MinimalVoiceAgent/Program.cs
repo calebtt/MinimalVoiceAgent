@@ -1,7 +1,7 @@
 ﻿using MinimalSileroVAD.Core;
 using Serilog;
 using Serilog.Events;
-
+using MinimalTextClassifier.Core;
 namespace MinimalVoiceAgent;
 
 public static partial class Algos
@@ -118,6 +118,7 @@ public class Program
         var stt = new SttProviderStreaming();
         await stt.InitializeAsync(sttConfig.SttModelUrl);
         var llm = new LlmChat(lmConfig, computerToolFunctions, kernel);
+        var wakeDetector = new MinimalTransformerClassifier("models/deberta_v3_small_fine_tuned_int8.onnx");
 
         _voiceAgentCore = VoiceAgentCore.CreateBuilder()
             .WithSttProvider(stt)
@@ -125,7 +126,8 @@ public class Program
             .WithTtsStreamer(tts)
             .WithAudioPacer(_audioPacer)
             .WithInterruption(false)
-            .WithWakeIdentifier("Alina")
+            //.WithWakeIdentifier("Alina")
+            .WithWakeDetector(wakeDetector)
             .WithVadSegmenter(vad)
             .Build();
 

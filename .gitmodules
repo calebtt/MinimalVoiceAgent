@@ -4,3 +4,6 @@
 [submodule "soundtouch.net"]
 	path = soundtouch.net
 	url = https://github.com/calebtt/soundtouch.net.git
+[submodule "MinimalTextClassifier"]
+	path = MinimalTextClassifier
+	url = https://github.com/calebtt/MinimalTextClassifier

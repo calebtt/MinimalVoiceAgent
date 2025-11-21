@@ -1,8 +1,0 @@
-{
-  "profiles": {
-    "WakeWordTrainingDataGenerator": {
-      "commandName": "Project",
-      "commandLineArgs": "Alina goodaudio badaudio noisedir"
-    }
-  }
-}

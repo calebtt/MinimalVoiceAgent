@@ -1,7 +1,7 @@
 ﻿using MinimalSileroVAD.Core;
 using NAudio.Wave;
 using Serilog;
-using WakeWordTrainingDataGenerator;
+using MinimalTextClassifier.Core;
 namespace MinimalVoiceAgent;
 
 public static partial class Algos
@@ -50,16 +50,15 @@ public class VoiceAgentCore : IAsyncDisposable
     private readonly LlmChat _llmChat;
     private readonly TtsStreamer _ttsStreamer;
     private readonly AudioPacer _audioPacer;
-    private readonly WakeWordDetector? _wakeDetector;
+
+    private readonly MinimalTransformerClassifier? _wakeDetector;
+    private const float ConfidenceCutoff = 0.5f;
 
     private readonly float _volumeLoweringFactor;
-    private readonly string? _wakeWord;
 
     private CancellationTokenSource? _cancellationTokenSource;
     private IVadSpeechSegmenter? _vad;
 
-    private readonly object _processingLock = new();
-    private bool _isProcessingTranscription;
     private bool _doUseInterruption;
     private bool _ignoreCurrentSegment;
 
@@ -76,16 +75,15 @@ public class VoiceAgentCore : IAsyncDisposable
         TtsStreamer ttsStreamer,
         AudioPacer audioPacer,
         bool doUseInterruption,
-        string? wakeWord,
-        float volumeLoweringFactor,
-        WakeWordDetector? wakeDetector = null)
+        MinimalTransformerClassifier wakeDetector,
+        float volumeLoweringFactor)
     {
         _streamingSttClient = streamingSttClient ?? throw new ArgumentNullException(nameof(streamingSttClient));
         _llmChat = llmChat ?? throw new ArgumentNullException(nameof(llmChat));
         _ttsStreamer = ttsStreamer ?? throw new ArgumentNullException(nameof(ttsStreamer));
         _audioPacer = audioPacer ?? throw new ArgumentNullException(nameof(audioPacer));
         _doUseInterruption = doUseInterruption;
-        _wakeWord = wakeWord;
+        _wakeDetector = wakeDetector;
         _volumeLoweringFactor = volumeLoweringFactor;
         _wakeDetector = wakeDetector;
 
@@ -95,8 +93,6 @@ public class VoiceAgentCore : IAsyncDisposable
 
         Log.Information("VoiceAgentCore created.");
     }
-
-    public bool IsProcessingTranscription => _isProcessingTranscription;
 
     public Task InitializeAsync(IVadSpeechSegmenter vadSegmenter)
     {
@@ -153,21 +149,7 @@ public class VoiceAgentCore : IAsyncDisposable
                     return;
                 }
 
-                if (_wakeWord != null && _wakeDetector != null)
-                {
-                    var fullPcm = pcmStream.ToArray(); // Full segment bytes
-                    var (isWake, conf) = _wakeDetector.IsWakeWord(fullPcm);
-                    if (!isWake)
-                    {
-                        Log.Information("WWD: Wake word not detected in segment; skipping STT.");
-                        return;
-                    }
-                    // Save activation clip
-                    _ = Algos.SaveFullSegmentAsync(fullPcm, 16000);
-                }
-
-                // Disabled audio processing to avoid LLM calls during testing.
-                //_streamingSttClient.ProcessAudioChunkAsync(pcmStream).Wait();
+                _ = _streamingSttClient.ProcessAudioChunkAsync(pcmStream);
             };
 
             Log.Information("VoiceAgentCore initialized.");
@@ -232,9 +214,6 @@ public class VoiceAgentCore : IAsyncDisposable
     {
         transcription = transcription.Trim();
 
-        // Check for Wake-word appearing in transcription trimmed, audio is now
-        // pre-processed before STT via custom model.
-
         if (!_doUseInterruption && _audioPacer.IsAudioPlaying)
         {
             // Ignore new transcription if not using interruption and TTS is playing
@@ -242,33 +221,14 @@ public class VoiceAgentCore : IAsyncDisposable
             return;
         }
 
-        Log.Information($"VoiceAgentCore: STT Complete transcription (after wake word check): '{transcription}'");
-
-        bool shouldProcess;
-        lock (_processingLock)
-        {
-            if (_isProcessingTranscription)
-            {
-                return;
-            }
-            _isProcessingTranscription = true;
-            shouldProcess = true;
-        }
-
-        if (!shouldProcess)
+        Log.Information("VoiceAgentCore: STT Complete transcription: '{transcription}'", transcription);
+        var classBegin = DateTime.Now;
+        bool isCommandText = _wakeDetector!.ClassifyText(transcription) > ConfidenceCutoff;
+        Log.Information("Classification completed in {duration}", (classBegin - DateTime.Now).ToString());
+        if(!isCommandText)
             return;
 
-        try
-        {
-            ProcessCompleteTranscriptionAsync(transcription).Wait();
-        }
-        finally
-        {
-            lock (_processingLock)
-            {
-                _isProcessingTranscription = false;
-            }
-        }
+        _ = ProcessCompleteTranscriptionAsync(transcription);
     }
 
     /// <summary>
@@ -388,7 +348,7 @@ public class VoiceAgentCore : IAsyncDisposable
         private TtsStreamer? _ttsStreamer;
         private AudioPacer? _audioPacer;
         private bool _doUseInterruption = true;
-        private string? _wakeWord;
+        private MinimalTransformerClassifier _wakeDetector;
         private Action<byte[]>? _audioResponseHandler;
         private float _volumeLoweringFactor = 0.35f;
         private IVadSpeechSegmenter? _vadSegmenter;
@@ -417,9 +377,9 @@ public class VoiceAgentCore : IAsyncDisposable
             return this;
         }
 
-        public Builder WithWakeIdentifier(string wakeWord)
+        public Builder WithWakeDetector(MinimalTransformerClassifier wakeDetector)
         {
-            _wakeWord = wakeWord;
+            _wakeDetector = wakeDetector;
             return this;
         }
 
@@ -465,9 +425,8 @@ public class VoiceAgentCore : IAsyncDisposable
                 _ttsStreamer,
                 _audioPacer,
                 _doUseInterruption,
-                _wakeWord,
-                _volumeLoweringFactor,
-                new("models/wakeword_model.zip"));
+                _wakeDetector,
+                _volumeLoweringFactor);
 
             if (_audioResponseHandler != null)
             {

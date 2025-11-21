@@ -55,7 +55,7 @@
 
 	<ItemGroup>
 		<ProjectReference Include="..\MinimalSileroVad\MinimalSileroVAD.Core\MinimalSileroVAD.Core.csproj" />
-		<ProjectReference Include="..\WakeWordTrainingDataGenerator\WakeWordTrainingDataGenerator.csproj" />
+		<ProjectReference Include="..\MinimalTextClassifier\MinimalTextClassifierTrainAndTest.csproj" />
 	</ItemGroup>
 
   <ItemGroup>
