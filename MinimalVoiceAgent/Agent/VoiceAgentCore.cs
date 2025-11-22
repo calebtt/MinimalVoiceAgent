@@ -224,7 +224,7 @@ public class VoiceAgentCore : IAsyncDisposable
         Log.Information("VoiceAgentCore: STT Complete transcription: '{transcription}'", transcription);
         var classBegin = DateTime.Now;
         bool isCommandText = _wakeDetector!.ClassifyText(transcription) > ConfidenceCutoff;
-        Log.Information("Classification completed in {duration}", (classBegin - DateTime.Now).ToString());
+        Log.Information("Classification completed in {duration}ms", (DateTime.Now - classBegin).Milliseconds.ToString());
         if(!isCommandText)
             return;
 

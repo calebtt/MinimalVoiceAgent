@@ -372,7 +372,7 @@ public class SttProviderStreaming : IDisposable
                 // Combine segments into complete transcription
                 var completeText = string.Join(" ", recentSegments.Select(s => s.Text));
 
-                Log.Information("Streaming STT: Complete transcription ready: '{0}'", completeText);
+                Log.Debug("Streaming STT: Complete transcription ready: '{0}'", completeText);
 
                 // Clear recent segments to prevent accumulation in next transcription
                 lock (_recentSegmentsLock)
@@ -440,7 +440,7 @@ public class SttProviderStreaming : IDisposable
         }
         catch (TaskCanceledException)
         {
-            Log.Information("WaitForCompleteTranscriptionAsync timed out; returning partial transcription.");
+            Log.Debug("WaitForCompleteTranscriptionAsync timed out; returning partial transcription.");
 
             var recentSegments = GetRecentSegments(TimeSpan.FromSeconds(10)); // Adjustable window
             var partialText = string.Join(" ", recentSegments.Select(s => s.Text));

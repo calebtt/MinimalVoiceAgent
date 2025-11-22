@@ -70,11 +70,11 @@ public static partial class Algos
             .MinimumLevel.Override("Microsoft", LogEventLevel.Warning)
             .MinimumLevel.Override("System", LogEventLevel.Warning)
             .WriteTo.Console(
-                restrictedToMinimumLevel: LogEventLevel.Debug,
+                restrictedToMinimumLevel: LogEventLevel.Information,
                 outputTemplate: "[{Timestamp:HH:mm:ss} {Level:u3}] {Message:lj}{NewLine}{Exception}")
             .WriteTo.File(
                 path: "minimal_voice_agent_log.txt",
-                restrictedToMinimumLevel: LogEventLevel.Debug,
+                restrictedToMinimumLevel: LogEventLevel.Information,
                 rollingInterval: RollingInterval.Infinite,
                 rollOnFileSizeLimit: true,
                 fileSizeLimitBytes: 100 * 1024 * 1024, // 100 MB
@@ -126,7 +126,6 @@ public class Program
             .WithTtsStreamer(tts)
             .WithAudioPacer(_audioPacer)
             .WithInterruption(false)
-            //.WithWakeIdentifier("Alina")
             .WithWakeDetector(wakeDetector)
             .WithVadSegmenter(vad)
             .Build();
