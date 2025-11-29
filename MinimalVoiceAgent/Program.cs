@@ -97,6 +97,8 @@ public class Program
 
     public static async Task Main(string[] args)
     {
+        // TODO verify env. var. for api key exists, if not, create it and prompt user for value.
+
         Algos.AddConsoleLogger();
 
         var lmConfig = await Algos.LoadLanguageModelConfigAsync("profiles/personal.json");
@@ -152,7 +154,7 @@ public class Program
     {
         await _cts.CancelAsync();
 
-        // Now safe to shut down core (disposes VAD/SileroModel)
+        // Now safe to shut down core
         if (_voiceAgentCore != null)
         {
             await _voiceAgentCore.ShutdownAsync();

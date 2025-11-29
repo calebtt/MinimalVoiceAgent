@@ -137,7 +137,7 @@ public class SoundFlowAudioRouter : IAsyncDisposable
             device: _duplexDevice,
             aecEnabled: true,
             nsEnabled: true,
-            agc1Enabled: false,
+            agc1Enabled: true,
             agc2Enabled: true,
             nsLevel: SoundFlow.Extensions.WebRtc.Apm.NoiseSuppressionLevel.High
         );
