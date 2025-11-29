@@ -176,6 +176,7 @@ public static partial class Algos
 /// Upgraded LlmChat class using Semantic Kernel for enhanced tool calling.
 /// Integrates profile configs for dynamic prompts from JSON.
 /// Tools loaded dynamically via kernel factory; assumes pre-loaded kernel.
+/// TODO: Add rate-limiting for API usage, it should not spam queries and rack up costs.
 /// </summary>
 public class LlmChat
 {

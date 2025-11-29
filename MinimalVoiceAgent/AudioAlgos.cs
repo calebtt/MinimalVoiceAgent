@@ -1,5 +1,4 @@
 ﻿using NAudio.Codecs;
-using NAudio.Dsp;
 using NAudio.Wave;
 using Serilog;
 using System.Runtime.InteropServices;
