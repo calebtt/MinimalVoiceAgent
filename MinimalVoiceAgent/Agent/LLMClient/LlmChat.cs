@@ -245,7 +245,7 @@ public class LlmChat
     /// With AutoInvoke, a single call handles tool execution and returns the final response.
     /// Disables tool calling if no functions loaded (robust against 422 errors).
     /// </summary>
-    public async Task<string> ProcessMessageAsync(string userMessage, CancellationToken cancellationToken = default)
+    public async Task<string> ProcessUserQueryAsync(string userMessage, CancellationToken cancellationToken = default)
     {
         ArgumentNullException.ThrowIfNullOrWhiteSpace(userMessage);
 
@@ -283,6 +283,25 @@ public class LlmChat
     }
 
     /// <summary>
+    /// Clears the chat history, retaining the system prompt.
+    /// </summary>
+    public void ClearHistory()
+    {
+        _chatHistory.Clear();
+        _chatHistory.AddSystemMessage(_systemPrompt);  // Ensure system prompt is always present after clear
+    }
+
+    /// <summary>
+    /// Adds a message from the assistant to the chat history.
+    /// </summary>
+    /// <param name="message">The message content to add. Cannot be null, empty, or consist only of whitespace.</param>
+    public void AddAssistantMessage(string message)
+    {
+        ArgumentNullException.ThrowIfNullOrWhiteSpace(message);
+        _chatHistory.AddAssistantMessage(message);
+    }
+
+    /// <summary>
     /// Builds the full system prompt from profile config (Instructions + Addendum + interpolated ToolGuidance).
     /// Enhanced: Dynamically includes descriptions/params only for loaded tools (avoids mismatch if none loaded).
     /// </summary>
@@ -302,15 +321,4 @@ public class LlmChat
         return promptBuilder.ToString();
     }
 
-    public void ClearHistory()
-    {
-        _chatHistory.Clear();
-        _chatHistory.AddSystemMessage(_systemPrompt);  // Ensure system prompt is always present after clear
-    }
-
-    public void AddAssistantMessage(string message)
-    {
-        ArgumentNullException.ThrowIfNullOrWhiteSpace(message);
-        _chatHistory.AddAssistantMessage(message);
-    }
 }

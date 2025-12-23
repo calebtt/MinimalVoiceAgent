@@ -98,6 +98,8 @@ public class Program
     public static async Task Main(string[] args)
     {
         // TODO verify env. var. for api key exists, if not, create it and prompt user for value.
+        // TODO add playback progress tracking for TTS clips, then when interrupted we can send that information to the LLM
+        // so it knows what the user actually heard before interrupting.
 
         Algos.AddConsoleLogger();
 

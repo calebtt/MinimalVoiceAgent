@@ -241,7 +241,7 @@ public class VoiceAgentCore : IAsyncDisposable
             Log.Information($"VoiceAgentCore: Processing complete transcription: {transcription}");
 
             // Updated: Use LlmChat.ProcessMessageAsync (no maxTokens; CT propagated)
-            string response = await _llmChat.ProcessMessageAsync(transcription, _cancellationTokenSource?.Token ?? CancellationToken.None);
+            string response = await _llmChat.ProcessUserQueryAsync(transcription, _cancellationTokenSource?.Token ?? CancellationToken.None);
             Log.Information($"VoiceAgentCore: LLM Response: {response}");
 
             if (_cancellationTokenSource?.IsCancellationRequested == true)
