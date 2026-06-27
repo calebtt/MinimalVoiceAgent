@@ -4,6 +4,7 @@ using KokoroSharp.Utilities;
 using Microsoft.ML.OnnxRuntime;
 using NAudio.Codecs;
 using NAudio.Wave;
+using NAudio.Wave.SampleProviders;
 using Serilog;
 using System.Buffers; // For ArrayPool (zero-alloc)
 using System.Collections.Concurrent; // For ConcurrentQueue
@@ -63,20 +64,30 @@ public static partial class Algos
             using var wavStream = new MemoryStream(wavAudio);
             using var reader = new WaveFileReader(wavStream);
 
-            var inputFormat = reader.WaveFormat;
-            var targetFormat = new WaveFormat(targetSampleRateHz, 16, 1);
+            // Cross-platform resample/downmix to mono 16-bit PCM at the target rate.
+            // NAudio's MediaFoundationResampler is Windows-only (depends on mfplat.dll), so we use
+            // the pure-managed WdlResamplingSampleProvider instead, which runs on Linux/macOS too.
+            ISampleProvider sampleProvider = reader.ToSampleProvider();
 
-            using var resampler = new MediaFoundationResampler(reader, targetFormat)
-            {
-                ResamplerQuality = 60
-            };
+            if (reader.WaveFormat.Channels == 2)
+                sampleProvider = new StereoToMonoSampleProvider(sampleProvider) { LeftVolume = 0.5f, RightVolume = 0.5f };
+            else if (reader.WaveFormat.Channels != 1)
+                throw new NotSupportedException($"Unsupported channel count: {reader.WaveFormat.Channels}.");
+
+            if (reader.WaveFormat.SampleRate != targetSampleRateHz)
+                sampleProvider = new WdlResamplingSampleProvider(sampleProvider, targetSampleRateHz);
 
             using var outStream = new MemoryStream();
-            byte[] buffer = new byte[4096];
-            int bytesRead;
-            while ((bytesRead = resampler.Read(buffer, 0, buffer.Length)) > 0)
+            float[] floatBuffer = new float[4096];
+            int samplesRead;
+            while ((samplesRead = sampleProvider.Read(floatBuffer, 0, floatBuffer.Length)) > 0)
             {
-                outStream.Write(buffer, 0, bytesRead);
+                for (int i = 0; i < samplesRead; i++)
+                {
+                    short s = (short)Math.Clamp(floatBuffer[i] * 32767f, short.MinValue, short.MaxValue);
+                    outStream.WriteByte((byte)(s & 0xFF));        // little-endian 16-bit
+                    outStream.WriteByte((byte)((s >> 8) & 0xFF));
+                }
             }
 
             byte[] rawPcm = outStream.ToArray();
