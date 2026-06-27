@@ -104,6 +104,17 @@ public class Program
         var lmConfig = await Algos.LoadLanguageModelConfigAsync("profiles/personal.json");
         var sttConfig = await Algos.LoadSttSettingsAsync("sttsettings.json");
 
+        // Preflight: verify the API key and model are usable before any heavy init
+        // (model downloads, audio devices). Fails fast with a clear message for testing.
+        var modelCheck = await Algos.ValidateModelAccessAsync(lmConfig);
+        if (!modelCheck.Ok)
+        {
+            Log.Fatal("Startup check failed: {Message}", modelCheck.Message);
+            Console.Error.WriteLine($"Startup check failed: {modelCheck.Message}");
+            return;
+        }
+        Log.Information("Startup check passed: {Message}", modelCheck.Message);
+
         // Initialize TTS provider
         await TtsProviderStreaming.InitializeAsync();
 

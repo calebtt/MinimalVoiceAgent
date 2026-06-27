@@ -1,7 +1,7 @@
 {
   "LanguageModel": {
     "ApiKeyEnvironmentVariable": "GROK_API_KEY",
-    "Model": "grok-4-fast-non-reasoning",
+    "Model": "grok-4.20-0309-non-reasoning",
     "EndPoint": "https://api.x.ai/v1",
     "MaxTokens": 300,
     "WelcomeMessage": "Assistant Alina ready.",

@@ -97,10 +97,88 @@ public record LanguageModelConfig(
 
 
 /// <summary>
+/// Result of the startup preflight that checks API key + model availability.
+/// </summary>
+public record ModelAccessResult(bool Ok, string Message);
+
+/// <summary>
 /// A place to put free functions.
 /// </summary>
 public static partial class Algos
 {
+    /// <summary>
+    /// Preflight check run at startup so configuration problems surface immediately instead of
+    /// as a mid-conversation failure. Verifies that (1) the configured API key environment
+    /// variable is set and accepted, and (2) the configured model is offered by the endpoint,
+    /// using the OpenAI-compatible <c>GET {EndPoint}/models</c> call.
+    /// </summary>
+    public static async Task<ModelAccessResult> ValidateModelAccessAsync(
+        LanguageModelConfig config, HttpClient? httpClient = null, CancellationToken ct = default)
+    {
+        ArgumentNullException.ThrowIfNull(config);
+
+        if (string.IsNullOrWhiteSpace(config.ApiKeyEnvironmentVariable))
+            return new(false, "No API key environment variable configured (ApiKeyEnvironmentVariable is empty).");
+        if (string.IsNullOrWhiteSpace(config.EndPoint))
+            return new(false, "No endpoint configured (EndPoint is empty).");
+        if (string.IsNullOrWhiteSpace(config.Model))
+            return new(false, "No model configured (Model is empty).");
+
+        var apiKey = Environment.GetEnvironmentVariable(config.ApiKeyEnvironmentVariable);
+        if (string.IsNullOrWhiteSpace(apiKey))
+            return new(false, $"API key not set: environment variable '{config.ApiKeyEnvironmentVariable}' is empty. Export it and restart.");
+
+        var modelsUrl = $"{config.EndPoint.TrimEnd('/')}/models";
+        var ownsClient = httpClient is null;
+        httpClient ??= new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+        try
+        {
+            using var request = new HttpRequestMessage(HttpMethod.Get, modelsUrl);
+            request.Headers.Authorization = new System.Net.Http.Headers.AuthenticationHeaderValue("Bearer", apiKey);
+            using var response = await httpClient.SendAsync(request, ct);
+
+            if (response.StatusCode is System.Net.HttpStatusCode.Unauthorized or System.Net.HttpStatusCode.Forbidden)
+                return new(false, $"API key rejected ({(int)response.StatusCode} {response.StatusCode}) by {modelsUrl}. Check the '{config.ApiKeyEnvironmentVariable}' value.");
+            if (!response.IsSuccessStatusCode)
+                return new(false, $"Could not reach model endpoint ({(int)response.StatusCode} {response.StatusCode}) at {modelsUrl}.");
+
+            var ids = ParseModelIds(await response.Content.ReadAsStringAsync(ct));
+            if (ids.Count == 0)
+                return new(true, $"Authenticated, but could not parse the model list to confirm '{config.Model}'. Proceeding.");
+            if (!ids.Contains(config.Model))
+                return new(false, $"Model '{config.Model}' is not available. Available: {string.Join(", ", ids)}.");
+
+            return new(true, $"API key accepted and model '{config.Model}' is available.");
+        }
+        catch (Exception ex) when (ex is HttpRequestException or TaskCanceledException)
+        {
+            return new(false, $"Failed to contact model endpoint {modelsUrl}: {ex.Message}");
+        }
+        finally
+        {
+            if (ownsClient) httpClient.Dispose();
+        }
+    }
+
+    /// <summary>Extracts model ids from an OpenAI-compatible <c>/models</c> response body.</summary>
+    internal static IReadOnlyList<string> ParseModelIds(string json)
+    {
+        try
+        {
+            using var doc = JsonDocument.Parse(json);
+            if (doc.RootElement.TryGetProperty("data", out var data) && data.ValueKind == JsonValueKind.Array)
+            {
+                var ids = new List<string>();
+                foreach (var item in data.EnumerateArray())
+                    if (item.TryGetProperty("id", out var id) && id.ValueKind == JsonValueKind.String)
+                        ids.Add(id.GetString()!);
+                return ids;
+            }
+        }
+        catch (JsonException) { /* malformed body — treat as no ids */ }
+        return Array.Empty<string>();
+    }
+
     public static Kernel BuildKernel(LanguageModelConfig config)
     {
         ArgumentNullException.ThrowIfNull(config);
