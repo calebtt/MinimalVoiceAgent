@@ -178,7 +178,7 @@ public static partial class Algos
 /// Tools loaded dynamically via kernel factory; assumes pre-loaded kernel.
 /// TODO: Add rate-limiting for API usage, it should not spam queries and rack up costs.
 /// </summary>
-public class LlmChat
+public class LlmChat : IChatProvider
 {
     private readonly Kernel _kernel;
     private readonly IChatCompletionService _chatService;

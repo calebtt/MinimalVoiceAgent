@@ -1,6 +1,9 @@
 /MinimalVoiceAgent/.vs
 /MinimalVoiceAgent/bin
 /MinimalVoiceAgent/obj
+/MinimalVoiceAgent.Tests/.vs
+/MinimalVoiceAgent.Tests/bin
+/MinimalVoiceAgent.Tests/obj
 /AudioProcessingModuleCs/.vs
 /AudioProcessingModuleCs/obj
 /AudioProcessingModuleCs/bin

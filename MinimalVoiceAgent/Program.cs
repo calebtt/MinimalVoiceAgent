@@ -115,7 +115,7 @@ public class Program
 
         // Initialize core components
         _audioPacer = new AudioPacer();
-        var vad = new VadSpeechSegmenterSileroV5();
+        var vad = new VadSpeechSegmenter();
         var tts = new TtsStreamer();
         var stt = new SttProviderStreaming();
         await stt.InitializeAsync(sttConfig.SttModelUrl);

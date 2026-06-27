@@ -1,0 +1,36 @@
+name: CI
+
+on:
+  push:
+    branches: [ master, main ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build-and-test:
+    name: Build & Test (Ubuntu)
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout (with submodules)
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      # The agent targets the net8.0 runtime but uses the C# 13 compiler, so we need
+      # the .NET 9 SDK to build and the .NET 8 runtime to run the net8.0 test host.
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            9.0.x
+
+      - name: Restore
+        run: dotnet restore MinimalVoiceAgent.Tests/MinimalVoiceAgent.Tests.csproj
+
+      - name: Build
+        run: dotnet build MinimalVoiceAgent.Tests/MinimalVoiceAgent.Tests.csproj -c Release --no-restore
+
+      - name: Test
+        run: dotnet test MinimalVoiceAgent.Tests/MinimalVoiceAgent.Tests.csproj -c Release --no-build --verbosity normal

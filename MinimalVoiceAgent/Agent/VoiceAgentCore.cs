@@ -47,7 +47,7 @@ public static partial class Algos
 public class VoiceAgentCore : IAsyncDisposable
 {
     private readonly SttProviderStreaming _streamingSttClient;
-    private readonly LlmChat _llmChat;
+    private readonly IChatProvider _llmChat;
     private readonly TtsStreamer _ttsStreamer;
     private readonly AudioPacer _audioPacer;
 
@@ -71,7 +71,7 @@ public class VoiceAgentCore : IAsyncDisposable
 
     private VoiceAgentCore(
         SttProviderStreaming streamingSttClient,
-        LlmChat llmChat,
+        IChatProvider llmChat,
         TtsStreamer ttsStreamer,
         AudioPacer audioPacer,
         bool doUseInterruption,
@@ -104,7 +104,7 @@ public class VoiceAgentCore : IAsyncDisposable
 
             bool volumeFilterActive = false;
 
-            _vad.SentenceBegin += (sender, e) =>
+            _vad.SpeechStarted += (sender, e) =>
             {
                 Log.Information("VAD: Speech segment started.");
 
@@ -127,12 +127,12 @@ public class VoiceAgentCore : IAsyncDisposable
                 }
             };
 
-            _vad.SentenceCompleted += (sender, pcmStream) =>
+            _vad.SpeechCompleted += (sender, segment) =>
             {
                 if (_cancellationTokenSource?.IsCancellationRequested == true)
                     return;
 
-                Log.Information($"VAD: Speech segment completed, {pcmStream.Length} bytes");
+                Log.Information($"VAD: Speech segment completed, {segment.Pcm.Length} bytes");
 
                 if (volumeFilterActive)
                 {
@@ -149,7 +149,7 @@ public class VoiceAgentCore : IAsyncDisposable
                     return;
                 }
 
-                _ = _streamingSttClient.ProcessAudioChunkAsync(pcmStream);
+                _ = _streamingSttClient.ProcessAudioChunkAsync(segment.AsStream());
             };
 
             Log.Information("VoiceAgentCore initialized.");
@@ -194,7 +194,7 @@ public class VoiceAgentCore : IAsyncDisposable
         if (_vad == null || _cancellationTokenSource?.IsCancellationRequested == true)
             return;
 
-        _vad.PushFrame(pcm16Khz, 16_000, 20);
+        _vad.PushFrame(pcm16Khz, 20);
     }
 
     public void InterruptPlayback()
@@ -344,7 +344,7 @@ public class VoiceAgentCore : IAsyncDisposable
     public class Builder
     {
         private SttProviderStreaming? _sttClient;
-        private LlmChat? _llmChat;
+        private IChatProvider? _llmChat;
         private TtsStreamer? _ttsStreamer;
         private AudioPacer? _audioPacer;
         private bool _doUseInterruption = true;
@@ -359,7 +359,7 @@ public class VoiceAgentCore : IAsyncDisposable
             return this;
         }
 
-        public Builder WithLlmChat(LlmChat llmChat)
+        public Builder WithLlmChat(IChatProvider llmChat)
         {
             _llmChat = llmChat;
             return this;
