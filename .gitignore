@@ -1,6 +1,15 @@
 /MinimalVoiceAgent/.vs
 /MinimalVoiceAgent/bin
 /MinimalVoiceAgent/obj
+
+# Large model artifacts and logs fetched/generated at runtime (not source-controlled)
+/MinimalVoiceAgent/kokoro.onnx
+/MinimalVoiceAgent/minimal_voice_agent_log.txt
+/MinimalVoiceAgent/models/deberta_v3_small_fine_tuned_int8.onnx
+/MinimalVoiceAgent/models/ggml-base.en-q5_1.bin
+/MinimalVoiceAgent.Tests/.vs
+/MinimalVoiceAgent.Tests/bin
+/MinimalVoiceAgent.Tests/obj
 /AudioProcessingModuleCs/.vs
 /AudioProcessingModuleCs/obj
 /AudioProcessingModuleCs/bin

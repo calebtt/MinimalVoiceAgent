@@ -11,6 +11,8 @@ Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ScreenyDimmery", "..\Screen
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MinimalTextClassifierTrainAndTest", "..\MinimalTextClassifier\MinimalTextClassifierTrainAndTest.csproj", "{1EDE1A18-D32B-9AEE-187A-49D882725EB7}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MinimalVoiceAgent.Tests", "..\MinimalVoiceAgent.Tests\MinimalVoiceAgent.Tests.csproj", "{D96084E0-EE99-4193-BDAE-2E3B6B2D84FD}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -69,6 +71,18 @@ Global
 		{1EDE1A18-D32B-9AEE-187A-49D882725EB7}.Release|x64.Build.0 = Release|Any CPU
 		{1EDE1A18-D32B-9AEE-187A-49D882725EB7}.Release|x86.ActiveCfg = Release|Any CPU
 		{1EDE1A18-D32B-9AEE-187A-49D882725EB7}.Release|x86.Build.0 = Release|Any CPU
+		{D96084E0-EE99-4193-BDAE-2E3B6B2D84FD}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{D96084E0-EE99-4193-BDAE-2E3B6B2D84FD}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{D96084E0-EE99-4193-BDAE-2E3B6B2D84FD}.Debug|x64.ActiveCfg = Debug|Any CPU
+		{D96084E0-EE99-4193-BDAE-2E3B6B2D84FD}.Debug|x64.Build.0 = Debug|Any CPU
+		{D96084E0-EE99-4193-BDAE-2E3B6B2D84FD}.Debug|x86.ActiveCfg = Debug|Any CPU
+		{D96084E0-EE99-4193-BDAE-2E3B6B2D84FD}.Debug|x86.Build.0 = Debug|Any CPU
+		{D96084E0-EE99-4193-BDAE-2E3B6B2D84FD}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{D96084E0-EE99-4193-BDAE-2E3B6B2D84FD}.Release|Any CPU.Build.0 = Release|Any CPU
+		{D96084E0-EE99-4193-BDAE-2E3B6B2D84FD}.Release|x64.ActiveCfg = Release|Any CPU
+		{D96084E0-EE99-4193-BDAE-2E3B6B2D84FD}.Release|x64.Build.0 = Release|Any CPU
+		{D96084E0-EE99-4193-BDAE-2E3B6B2D84FD}.Release|x86.ActiveCfg = Release|Any CPU
+		{D96084E0-EE99-4193-BDAE-2E3B6B2D84FD}.Release|x86.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

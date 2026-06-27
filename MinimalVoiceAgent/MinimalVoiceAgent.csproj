@@ -12,6 +12,10 @@
 	</PropertyGroup>
 
 	<ItemGroup>
+		<InternalsVisibleTo Include="MinimalVoiceAgent.Tests" />
+	</ItemGroup>
+
+	<ItemGroup>
 		<PackageReference Include="KokoroSharp.GPU" Version="0.6.2" />
 		<PackageReference Include="KokoroSharp.GPU.Windows" Version="0.6.2" />
 		<PackageReference Include="KokoroSharp.GPU.Linux" Version="0.6.2" />

@@ -3,6 +3,7 @@ using NAudio.CoreAudioApi;
 using Serilog;
 using System.ComponentModel;
 using System.Diagnostics; // For Process.Start
+using System.Globalization; // For invariant numeric parsing of stringified tool args
 using System.Management; // For system info
 using System.Reflection;
 using System.Runtime.InteropServices;
@@ -84,57 +85,6 @@ public static partial class Algos
         return candidates;
     }
 
-    public static async Task<string?> RunPythonAdDetectorAsync(string mode, string pythonScriptPath, string pythonEnv)
-    {
-        if (!File.Exists(pythonScriptPath))
-        {
-            Log.Warning("Python script missing; skipping analysis.");
-            return null;
-        }
-
-        try
-        {
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = pythonEnv,
-                Arguments = $"\"{pythonScriptPath}\" --mode {mode}",
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true
-            };
-
-            using var process = new Process { StartInfo = startInfo };
-            process.Start();
-            var outputTask = process.StandardOutput.ReadToEndAsync();
-            var errorTask = process.StandardError.ReadToEndAsync();
-            await process.WaitForExitAsync(); // .NET 8+ async
-
-            var output = await outputTask;
-            var error = await errorTask;
-
-            if (process.ExitCode != 0)
-            {
-                Log.Error("Python analysis failed (code {Code}): {Error}", process.ExitCode, error);
-                return null;
-            }
-
-            // Trim whitespace, validate JSON
-            output = output.Trim();
-            if (string.IsNullOrWhiteSpace(output) || !output.StartsWith("{"))
-            {
-                Log.Warning("Invalid Python output: {Output}", output);
-                return null;
-            }
-
-            return output;
-        }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "Error running Python for ad detection.");
-            return null;
-        }
-    }
 
     public record AppCandidate(string Name, string? AppID, string? TilePath);
 }
@@ -150,28 +100,19 @@ public class ComputerToolFunctions
     private readonly Dictionary<DateTimeOffset, string> _localReminders = new(); // In-memory reminders
     private readonly List<System.Timers.Timer> _activeTimers = new(); // For managing timers
     private readonly string _notificationLogPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "VoiceAgent", "notifications.log");
-    private readonly string _pythonScriptPath; // Path to the local Python analysis script
     private const int VolumeStep = 10; // Fixed step size for raise/lower (10% increments)
-    private const string PythonEnv = "python"; // Assume 'python' in PATH; configurable via env var
-                                               // Static fields for dynamic DLL loading (cached)
-    private static Assembly _dimmerAssembly;
-    private static Type _dimmerType;
+    // Static fields for dynamic DLL loading (cached; assigned on first use in LoadDimmerDll)
+    private static Assembly _dimmerAssembly = null!;
+    private static Type _dimmerType = null!;
     private static readonly string _dllPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ScreenyDimmery.dll");  // Adjust path if DLL is elsewhere
 
 
     /// <summary>
-    /// Primary constructor: Initializes simulation, log dir, and Python script path.
-    /// Expects a local Python script at ./python/ad_detector.py (adapted from provided script).
+    /// Primary constructor: Initializes the notification log directory.
     /// </summary>
     public ComputerToolFunctions()
     {
         Directory.CreateDirectory(Path.GetDirectoryName(_notificationLogPath)!); // Ensure log dir
-        _pythonScriptPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "python", "ad_detector.py");
-
-        if (!File.Exists(_pythonScriptPath))
-        {
-            Log.Warning("Python ad_detector.py missing—ad skip tool will fallback to basic detection. Place it at {Path}", _pythonScriptPath);
-        }
     }
 
     private static void LoadDimmerDll()
@@ -215,16 +156,21 @@ public class ComputerToolFunctions
     [KernelFunction("set_screen_dimming")]
     [Description("Set the screen dimming level (0.1 to 1.0 for 10% to 100% dimness reduction). Clamps to min 10%. Displays brief label on change. Windows only.")]
     public virtual async Task<string> SetScreenDimmingAsync(
-        [Description("Dimming level (0.1-1.0)")] float level)
+        [Description("Dimming level as a decimal string between \"0.1\" and \"1.0\" (e.g., \"0.5\" for 50%)")] string level)
     {
         try
         {
-            if (level < 0.1f || level > 1.0f)
+            // Pass as a string and parse here: xAI's strict tool calling rejects non-string
+            // required parameters with a 422, so all tool args are kept as strings.
+            if (!float.TryParse(level, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsedLevel))
+                return JsonSerializer.Serialize(new { error = "Invalid argument", details = $"level '{level}' is not a number." }, _jsonOptions);
+
+            if (parsedLevel < 0.1f || parsedLevel > 1.0f)
                 throw new ArgumentOutOfRangeException(nameof(level), "Level must be between 0.1 and 1.0.");
 
-            InvokeDimmerMethod("SetSingleMonitorOverlayBrightness", level);
+            InvokeDimmerMethod("SetSingleMonitorOverlayBrightness", parsedLevel);
 
-            string message = $"Screen dimming set to {level * 100}%.";
+            string message = $"Screen dimming set to {parsedLevel * 100}%.";
             Log.Information(message);
 
             await Task.CompletedTask;
@@ -555,17 +501,22 @@ public class ComputerToolFunctions
     [KernelFunction("set_timer")]
     [Description("Set a timer that logs or alerts after a duration (e.g., '5 minutes for compile').")]
     public virtual async Task<string> SetTimerAsync(
-        [Description("Duration in seconds")] int durationSeconds,
+        [Description("Duration in seconds as a string (e.g., \"300\" for 5 minutes)")] string durationSeconds,
         [Description("Message for when timer ends")] string? message = "Timer ended.")
     {
         try
         {
-            if (durationSeconds <= 0)
+            // Args are kept as strings to satisfy xAI's strict tool calling (non-string
+            // required params 422), then parsed here.
+            if (!int.TryParse(durationSeconds, NumberStyles.Integer, CultureInfo.InvariantCulture, out var seconds))
+                return JsonSerializer.Serialize(new { error = "Invalid argument", details = $"durationSeconds '{durationSeconds}' is not an integer." }, _jsonOptions);
+
+            if (seconds <= 0)
             {
                 throw new ArgumentException("Duration must be positive.");
             }
 
-            var timer = new System.Timers.Timer(durationSeconds * 1000) { AutoReset = false };
+            var timer = new System.Timers.Timer(seconds * 1000) { AutoReset = false };
             timer.Elapsed += (sender, e) =>
             {
                 Log.Information("Timer ended: {Message}", message);
@@ -727,63 +678,6 @@ public class ComputerToolFunctions
         }
     }
 
-    [KernelFunction("skip_youtube_ad")]
-    [Description("Skip YouTube ads: Runs Python script to capture/analyze screen with Florence-2, detect 'Skip' button, click if found, verify success.")]
-    public virtual async Task<string> SkipYoutubeAdAsync(
-        [Description("Screenshot interval (default 2s)")] int pollIntervalSeconds = 2,
-        [Description("Max wait time for button (default 30s)")] int maxPollSeconds = 30)
-    {
-        try
-        {
-            if (!File.Exists(_pythonScriptPath))
-            {
-                Log.Warning("Python script missing; ad skip unavailable.");
-                return JsonSerializer.Serialize(new { error = "Script missing", details = "Place adskip5.py at {Path}" }, _jsonOptions);
-            }
-
-            var args = $"\"{_pythonScriptPath}\" --mode live --interval {pollIntervalSeconds} --max-poll-seconds {maxPollSeconds}";
-            var startInfo = new ProcessStartInfo
-            {
-                FileName = PythonEnv,
-                Arguments = args,
-                UseShellExecute = false,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-                CreateNoWindow = true
-            };
-
-            using var process = new Process { StartInfo = startInfo };
-            process.Start();
-            var output = await process.StandardOutput.ReadToEndAsync();
-            var error = await process.StandardError.ReadToEndAsync();
-            await process.WaitForExitAsync();
-
-            if (process.ExitCode != 0)
-            {
-                Log.Error("Python ad skip failed (code {Code}): {Error}", process.ExitCode, error);
-                return JsonSerializer.Serialize(new { error = "Execution failed", details = error }, _jsonOptions);
-            }
-
-            // Parse JSON result
-            var jsonNode = JsonNode.Parse(output.Trim());
-            if (jsonNode == null)
-            {
-                Log.Warning("Invalid Python JSON: {Output}", output);
-                return JsonSerializer.Serialize(new { status = "partial", message = "Detection failed—check logs." }, _jsonOptions);
-            }
-
-            var status = jsonNode["status"]?.ToString() ?? "partial";
-            var message = jsonNode["message"]?.ToString() ?? "Unknown result.";
-            Log.Information("Ad skip result: {Status} - {Message}", status, message);
-
-            return JsonSerializer.Serialize(new { status, message }, _jsonOptions);
-        }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "Ad skip failed.");
-            return JsonSerializer.Serialize(new { error = "Execution failed", details = ex.Message }, _jsonOptions);
-        }
-    }
 
     [KernelFunction("lock_screen")]
     [Description("Lock the Windows screen immediately (user session).")]
