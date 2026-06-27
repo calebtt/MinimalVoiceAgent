@@ -110,7 +110,7 @@ public class Program
         if (!modelCheck.Ok)
         {
             Log.Fatal("Startup check failed: {Message}", modelCheck.Message);
-            Console.Error.WriteLine($"Startup check failed: {modelCheck.Message}");
+            await Console.Error.WriteLineAsync($"Startup check failed: {modelCheck.Message}");
             return;
         }
         Log.Information("Startup check passed: {Message}", modelCheck.Message);

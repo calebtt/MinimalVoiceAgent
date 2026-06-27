@@ -101,9 +101,9 @@ public class ComputerToolFunctions
     private readonly List<System.Timers.Timer> _activeTimers = new(); // For managing timers
     private readonly string _notificationLogPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "VoiceAgent", "notifications.log");
     private const int VolumeStep = 10; // Fixed step size for raise/lower (10% increments)
-    // Static fields for dynamic DLL loading (cached)
-    private static Assembly _dimmerAssembly;
-    private static Type _dimmerType;
+    // Static fields for dynamic DLL loading (cached; assigned on first use in LoadDimmerDll)
+    private static Assembly _dimmerAssembly = null!;
+    private static Type _dimmerType = null!;
     private static readonly string _dllPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ScreenyDimmery.dll");  // Adjust path if DLL is elsewhere
 
 
