@@ -254,27 +254,6 @@
         }
       },
       {
-        "name": "skip_youtube_ad",
-        "description": "Detect and skip YouTube ads intelligently: Captures screenshots, uses local LLaVA model via Python to generate descriptions, checks for 'Skip Ad' button presence/clickability, simulates click, verifies success.",
-        "parameters": {
-          "type": "object",
-          "properties": {
-            "maxPollSeconds": {
-              "type": "integer",
-              "description": "Max wait time for button (default 30s)",
-              "required": false,
-              "default": 30
-            },
-            "pollIntervalSeconds": {
-              "type": "integer",
-              "description": "Screenshot interval (default 2s)",
-              "required": false,
-              "default": 2
-            }
-          }
-        }
-      },
-      {
         "name": "lock_screen",
         "description": "Lock the Windows screen immediately (user session).",
         "parameters": {
@@ -335,11 +314,6 @@
         "priority": 1
       },
       {
-        "toolName": "skip_youtube_ad",
-        "guidance": "Invoke on 'skip ad' or 'skip YouTube ad'. Poll until clickable, click, verify (no ad post-click). Confirm success/fail via notification.",
-        "priority": 2
-      },
-      {
         "toolName": "lock_screen",
         "guidance": "Invoke on 'lock screen'. Immediate action; confirm: 'Screen locked.'",
         "priority": 3
@@ -375,11 +349,6 @@
         "id": "no-tool-fallback",
         "description": "OTHER: If no tool matches, respond naturally in 1-2 sentences; suggest alternatives.",
         "appliesTo": [ "global" ]
-      },
-      {
-        "id": "media-automation",
-        "description": "MEDIA: For YouTube/media, invoke skip_youtube_ad proactively if ad detected; combine with volume tools.",
-        "appliesTo": [ "skip_youtube_ad", "lower_volume" ]
       },
       {
         "id": "file-safety",
