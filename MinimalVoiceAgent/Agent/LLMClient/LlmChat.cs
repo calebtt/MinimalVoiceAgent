@@ -361,23 +361,60 @@ public class LlmChat : IChatProvider
     }
 
     /// <summary>
-    /// Builds the full system prompt from profile config (Instructions + Addendum + interpolated ToolGuidance).
-    /// Enhanced: Dynamically includes descriptions/params only for loaded tools (avoids mismatch if none loaded).
+    /// Builds the full system prompt from the profile: base instructions, ordered prompt sections,
+    /// rules, and per-tool guidance. Tool name/parameter schemas are intentionally omitted because
+    /// Semantic Kernel already sends those to the model as the function-calling tool definitions;
+    /// only the behavioral guidance that is not part of the schema is included here. Tool guidance
+    /// is filtered to the tools actually loaded so the model is not told about unavailable tools.
     /// </summary>
-    private static string BuildSystemPrompt(LanguageModelConfig config, ImmutableList<KernelFunctionMetadata> functionsMetadata)
+    internal static string BuildSystemPrompt(LanguageModelConfig config, ImmutableList<KernelFunctionMetadata> functionsMetadata)
     {
-        var promptBuilder = new StringBuilder(config.InstructionsText ?? string.Empty);
+        var sb = new StringBuilder();
+        var loadedToolNames = functionsMetadata.Select(f => f.Name).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        // Enhance with loaded tool descriptions/params (immutable; detailed for better LLM guidance)
-        if (functionsMetadata.Count > 0)
+        // 1. Base instructions / persona.
+        if (!string.IsNullOrWhiteSpace(config.InstructionsText))
+            sb.AppendLine(config.InstructionsText.Trim());
+
+        // 2. Composable prompt sections, ordered Base -> Addendum -> Rules -> Tools.
+        //    Sections conditioned on "tools_loaded" are skipped when no tools are available.
+        var sections = (config.PromptSections ?? new List<PromptSection>())
+            .Where(s => !string.IsNullOrWhiteSpace(s.Content))
+            .Where(s => functionsMetadata.Count > 0 || !string.Equals(s.Condition, "tools_loaded", StringComparison.OrdinalIgnoreCase))
+            .OrderBy(s => s.Type);
+        foreach (var section in sections)
         {
-            var toolDescriptions = string.Join("\n\n", functionsMetadata.Select(f =>
-                $"Tool '{f.PluginName ?? "default"}-{f.Name}': {f.Description}\nParameters:\n" +
-                string.Join("\n", f.Parameters.Select(p =>
-                    $"- {p.Name} ({p.ParameterType?.Name ?? "string"}): {p.Description ?? "No description"} (required: {p.IsRequired}, default: {p.DefaultValue ?? "none"})"))));
+            sb.AppendLine();
+            sb.AppendLine(section.Content.Trim());
         }
 
-        return promptBuilder.ToString();
+        // 3. Global rules.
+        var rules = (config.Rules ?? new List<Rule>())
+            .Where(r => !string.IsNullOrWhiteSpace(r.Description))
+            .ToList();
+        if (rules.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("Guidelines:");
+            foreach (var rule in rules)
+                sb.AppendLine($"- {rule.Description.Trim()}");
+        }
+
+        // 4. Per-tool guidance for loaded tools, ordered by priority (lower first).
+        var toolInstructions = (config.ToolInstructions ?? new List<ToolInstruction>())
+            .Where(ti => !string.IsNullOrWhiteSpace(ti.Guidance))
+            .Where(ti => loadedToolNames.Count == 0 || loadedToolNames.Contains(ti.ToolName))
+            .OrderBy(ti => ti.Priority)
+            .ToList();
+        if (toolInstructions.Count > 0)
+        {
+            sb.AppendLine();
+            sb.AppendLine("Tool usage notes:");
+            foreach (var ti in toolInstructions)
+                sb.AppendLine($"- {ti.ToolName}: {ti.Guidance.Trim()}");
+        }
+
+        return sb.ToString().TrimEnd();
     }
 
     public void ClearHistory()
