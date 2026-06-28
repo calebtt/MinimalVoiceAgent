@@ -91,7 +91,6 @@ public class Program
 {
     private static VoiceAgentCore? _voiceAgentCore;
     private static CancellationTokenSource _cts = new();
-    private static readonly AudioProcessingConfig _audioConfig = AudioProcessingConfig.CreateDefault();
     private static AudioPacer? _audioPacer;
     private static SoundFlowAudioRouter? _audioRouter;
     private static CleanSpeechDaemonCaptureSource? _cleanSpeechSource;
@@ -126,22 +125,11 @@ public class Program
 
         // Initialize core components
         _audioPacer = new AudioPacer();
-        var vad = new VadSpeechSegmenter();
         var tts = new TtsStreamer();
         var stt = new SttProviderStreaming();
         await stt.InitializeAsync(sttConfig.SttModelUrl);
         var llm = new LlmChat(lmConfig, computerToolFunctions, kernel);
         var wakeDetector = new MinimalTransformerClassifier("models/deberta_v3_small_fine_tuned_int8.onnx");
-
-        _voiceAgentCore = VoiceAgentCore.CreateBuilder()
-            .WithSttProvider(stt)
-            .WithLlmChat(llm)
-            .WithTtsStreamer(tts)
-            .WithAudioPacer(_audioPacer)
-            .WithInterruption(false)
-            .WithWakeDetector(wakeDetector)
-            .WithVadSegmenter(vad)
-            .Build();
 
         // Microphone source selection. When enabled, consume cleaned audio from the external
         // clean-speech-daemon (which removes system playback and noise) instead of capturing the
@@ -171,7 +159,12 @@ public class Program
                 {
                     try
                     {
-                        var daemon = new CleanSpeechDaemonProcess(sttConfig.Capture.DaemonDirectory, sttConfig.Capture.SocketPath);
+                        var daemonConfigPath = Path.Combine(
+                            AppContext.BaseDirectory, sttConfig.Capture.DaemonConfigPath);
+                        var daemon = new CleanSpeechDaemonProcess(
+                            sttConfig.Capture.DaemonDirectory,
+                            sttConfig.Capture.SocketPath,
+                            daemonConfigPath);
                         bool started = await daemon.EnsureStartedAsync(
                             TimeSpan.FromSeconds(sttConfig.Capture.DaemonStartupTimeoutSeconds), _cts.Token);
                         if (started)
@@ -208,6 +201,24 @@ public class Program
                 }
             }
         }
+
+        IVadSpeechSegmenter vadSegmenter = useInternalCapture
+            ? new VadSpeechSegmenter()
+            : new DaemonGatedSpeechSegmenter();
+        Log.Information(
+            useInternalCapture
+                ? "Utterance segmentation: Silero VAD (local microphone)."
+                : "Utterance segmentation: energy gate (daemon capture; Silero VAD skipped to avoid double-VAD).");
+
+        _voiceAgentCore = VoiceAgentCore.CreateBuilder()
+            .WithSttProvider(stt)
+            .WithLlmChat(llm)
+            .WithTtsStreamer(tts)
+            .WithAudioPacer(_audioPacer)
+            .WithInterruption(false)
+            .WithWakeDetector(wakeDetector)
+            .WithVadSegmenter(vadSegmenter)
+            .Build();
 
         _audioRouter = SoundFlowAudioRouter.CreateBuilder()
             .WithAudioPacer(_audioPacer)

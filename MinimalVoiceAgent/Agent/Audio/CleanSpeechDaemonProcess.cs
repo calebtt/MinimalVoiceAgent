@@ -13,9 +13,10 @@ public sealed class CleanSpeechDaemonProcess : IAsyncDisposable
 {
     private readonly string _workingDirectory;
     private readonly string _socketPath;
+    private readonly string? _configPath;
     private Process? _process;
 
-    public CleanSpeechDaemonProcess(string workingDirectory, string socketPath)
+    public CleanSpeechDaemonProcess(string workingDirectory, string socketPath, string? configPath = null)
     {
         if (string.IsNullOrWhiteSpace(workingDirectory))
             throw new ArgumentException("Daemon directory is required.", nameof(workingDirectory));
@@ -23,6 +24,7 @@ public sealed class CleanSpeechDaemonProcess : IAsyncDisposable
             throw new ArgumentException("Socket path is required.", nameof(socketPath));
         _workingDirectory = workingDirectory;
         _socketPath = socketPath;
+        _configPath = string.IsNullOrWhiteSpace(configPath) ? null : configPath;
     }
 
     /// <summary>
@@ -42,7 +44,7 @@ public sealed class CleanSpeechDaemonProcess : IAsyncDisposable
             throw new DirectoryNotFoundException(
                 $"clean-speech-daemon directory '{dir}' not found. Did you init the submodule (git submodule update --init)?");
 
-        var (exe, args) = ResolveLaunchCommand(dir);
+        var (exe, args) = ResolveLaunchCommand(dir, _configPath);
         Log.Information("Starting clean-speech-daemon: {Exe} {Args} (cwd {Dir})", exe, args, dir);
 
         var psi = new ProcessStartInfo
@@ -66,20 +68,33 @@ public sealed class CleanSpeechDaemonProcess : IAsyncDisposable
     }
 
     /// <summary>Resolves how to launch the daemon from its venv. Prefers the console script.</summary>
-    internal static (string exe, string args) ResolveLaunchCommand(string daemonDir)
+    internal static (string exe, string args) ResolveLaunchCommand(string daemonDir, string? configPath = null)
     {
+        var runArgs = BuildRunArguments(configPath);
         var venvBin = Path.Combine(daemonDir, ".venv", "bin");
         var consoleScript = Path.Combine(venvBin, "clean-speech-daemon");
         if (File.Exists(consoleScript))
-            return (consoleScript, "run");
+            return (consoleScript, runArgs);
 
         var python = Path.Combine(venvBin, "python");
         if (File.Exists(python))
-            return (python, "-m clean_speech_daemon run");
+            return (python, $"-m clean_speech_daemon {runArgs}");
 
         throw new FileNotFoundException(
             $"No clean-speech-daemon virtualenv found under '{Path.Combine(daemonDir, ".venv")}'. " +
             "Run scripts/setup-clean-speech-daemon.sh once to create it.");
+    }
+
+    internal static string BuildRunArguments(string? configPath)
+    {
+        if (string.IsNullOrWhiteSpace(configPath))
+            return "run";
+
+        var fullPath = Path.GetFullPath(configPath);
+        if (!File.Exists(fullPath))
+            return "run";
+
+        return $"run --config \"{fullPath}\"";
     }
 
     private async Task WaitForSocketAsync(TimeSpan timeout, CancellationToken ct)

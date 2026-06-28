@@ -73,5 +73,6 @@ off. Requires Linux or macOS (Unix domain sockets).
 
 - The daemon emits little-endian 16-bit mono PCM at 48 kHz (per its socket header); the source
   resamples to the agent's 16 kHz pipeline rate.
-- The daemon also does its own VAD gating; the agent still runs its Silero VAD to segment
-  utterances. This is complementary, not conflicting.
+- When daemon capture is active the agent uses an energy-based segmenter instead of Silero VAD,
+  so utterances are not gated twice. Auto-start uses the bundled `daemon/clean-speech-agent.toml`
+  profile, which keeps echo cancellation and noise suppression on but sets `enable_vad = false`.

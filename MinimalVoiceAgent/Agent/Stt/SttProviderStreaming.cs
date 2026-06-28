@@ -40,6 +40,13 @@ public class CaptureConfig
     /// <summary>How long to wait for the daemon's socket to appear after auto-start.</summary>
     [JsonPropertyName("DaemonStartupTimeoutSeconds")]
     public int DaemonStartupTimeoutSeconds { get; set; } = 20;
+
+    /// <summary>
+    /// Daemon config passed to <c>run --config</c> on auto-start. Relative paths resolve from the
+    /// agent's base directory. Defaults to the bundled profile with VAD disabled.
+    /// </summary>
+    [JsonPropertyName("DaemonConfigPath")]
+    public string DaemonConfigPath { get; set; } = "daemon/clean-speech-agent.toml";
 }
 
 public static partial class Algos
