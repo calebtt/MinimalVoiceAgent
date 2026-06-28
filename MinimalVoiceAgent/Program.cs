@@ -140,75 +140,51 @@ public class Program
             sttConfig.Capture.UseCleanSpeechDaemon, sttConfig.Capture.AutoStartDaemon,
             sttConfig.Capture.SocketPath, sttConfig.Capture.DaemonDirectory);
 
-        bool useInternalCapture = true;
-        if (!sttConfig.Capture.UseCleanSpeechDaemon)
+        bool useDaemonCapture = false;
+        CleanSpeechDaemonCaptureSource? pendingDaemonSource = null;
+        bool wantDaemonCapture = sttConfig.Capture.UseCleanSpeechDaemon;
+
+        if (!wantDaemonCapture)
         {
             Log.Information("Microphone source: local microphone (clean-speech-daemon disabled in sttsettings.json).");
         }
+        else if (!CleanSpeechDaemonCaptureSource.IsPlatformSupported)
+        {
+            Log.Warning(
+                "clean-speech-daemon capture requires Linux or macOS; falling back to the local microphone (with APM).");
+        }
         else
         {
-            if (!CleanSpeechDaemonCaptureSource.IsPlatformSupported)
+            // Optionally launch the bundled daemon ourselves before connecting.
+            if (sttConfig.Capture.AutoStartDaemon)
             {
-                Log.Warning(
-                    "clean-speech-daemon capture requires Linux or macOS; falling back to the local microphone (with APM).");
-            }
-            else
-            {
-                // Optionally launch the bundled daemon ourselves before connecting.
-                if (sttConfig.Capture.AutoStartDaemon)
-                {
-                    try
-                    {
-                        var daemonConfigPath = Path.Combine(
-                            AppContext.BaseDirectory, sttConfig.Capture.DaemonConfigPath);
-                        var daemon = new CleanSpeechDaemonProcess(
-                            sttConfig.Capture.DaemonDirectory,
-                            sttConfig.Capture.SocketPath,
-                            daemonConfigPath);
-                        bool started = await daemon.EnsureStartedAsync(
-                            TimeSpan.FromSeconds(sttConfig.Capture.DaemonStartupTimeoutSeconds), _cts.Token);
-                        if (started)
-                            _cleanSpeechDaemon = daemon;          // we own it; stop it on shutdown
-                        else
-                            await daemon.DisposeAsync();           // already running; leave it alone
-                    }
-                    catch (Exception ex)
-                    {
-                        Log.Warning(ex, "Failed to auto-start clean-speech-daemon; will try to connect to an existing instance.");
-                    }
-                }
-
-                var source = new CleanSpeechDaemonCaptureSource(sttConfig.Capture.SocketPath);
                 try
                 {
-                    await source.StartAsync(chunk => _voiceAgentCore.ProcessIncomingAudioChunk(chunk), _cts.Token);
-                    _cleanSpeechSource = source;
-                    useInternalCapture = false;
-                    Log.Information(
-                        "Microphone source: clean-speech-daemon ({Path}). Internal capture and APM disabled.",
-                        sttConfig.Capture.SocketPath);
+                    var daemonConfigPath = Path.Combine(
+                        AppContext.BaseDirectory, sttConfig.Capture.DaemonConfigPath);
+                    var daemon = new CleanSpeechDaemonProcess(
+                        sttConfig.Capture.DaemonDirectory,
+                        sttConfig.Capture.SocketPath,
+                        daemonConfigPath);
+                    bool started = await daemon.EnsureStartedAsync(
+                        TimeSpan.FromSeconds(sttConfig.Capture.DaemonStartupTimeoutSeconds), _cts.Token);
+                    if (started)
+                        _cleanSpeechDaemon = daemon;          // we own it; stop it on shutdown
+                    else
+                        await daemon.DisposeAsync();           // already running; leave it alone
                 }
                 catch (Exception ex)
                 {
-                    Log.Warning(ex,
-                        "clean-speech-daemon capture unavailable; falling back to the local microphone (with APM).");
-                    await source.DisposeAsync();
-                    if (_cleanSpeechDaemon != null)
-                    {
-                        await _cleanSpeechDaemon.DisposeAsync();   // we started it but can't use it; stop it
-                        _cleanSpeechDaemon = null;
-                    }
+                    Log.Warning(ex, "Failed to auto-start clean-speech-daemon; will try to connect to an existing instance.");
                 }
             }
+
+            pendingDaemonSource = new CleanSpeechDaemonCaptureSource(sttConfig.Capture.SocketPath);
         }
 
-        IVadSpeechSegmenter vadSegmenter = useInternalCapture
-            ? new VadSpeechSegmenter()
-            : new DaemonGatedSpeechSegmenter();
-        Log.Information(
-            useInternalCapture
-                ? "Utterance segmentation: Silero VAD (local microphone)."
-                : "Utterance segmentation: energy gate (daemon capture; Silero VAD skipped to avoid double-VAD).");
+        // Bundled daemon profile sets enable_vad=false, so the socket stream is continuous cleaned
+        // audio — Silero is the right utterance gate. Double-VAD only happens if daemon VAD is on.
+        var vadSegmenter = new VadSpeechSegmenter();
 
         _voiceAgentCore = VoiceAgentCore.CreateBuilder()
             .WithSttProvider(stt)
@@ -220,11 +196,47 @@ public class Program
             .WithVadSegmenter(vadSegmenter)
             .Build();
 
+        if (pendingDaemonSource != null)
+        {
+            try
+            {
+                await pendingDaemonSource.StartAsync(
+                    chunk => _voiceAgentCore.ProcessIncomingAudioChunk(chunk), _cts.Token);
+                _cleanSpeechSource = pendingDaemonSource;
+                useDaemonCapture = true;
+                Log.Information(
+                    "Microphone source: clean-speech-daemon ({Path}). Internal capture and APM disabled.",
+                    sttConfig.Capture.SocketPath);
+                Log.Information(
+                    "Utterance segmentation: Silero VAD (daemon capture; daemon VAD off in bundled profile).");
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex,
+                    "clean-speech-daemon capture unavailable; falling back to the local microphone (with APM).");
+                await pendingDaemonSource.DisposeAsync();
+                if (_cleanSpeechDaemon != null)
+                {
+                    await _cleanSpeechDaemon.DisposeAsync();   // we started it but can't use it; stop it
+                    _cleanSpeechDaemon = null;
+                }
+                Log.Information("Utterance segmentation: Silero VAD (local microphone fallback).");
+            }
+        }
+        else if (wantDaemonCapture)
+        {
+            Log.Information("Utterance segmentation: Silero VAD (local microphone fallback).");
+        }
+        else
+        {
+            Log.Information("Utterance segmentation: Silero VAD (local microphone).");
+        }
+
         _audioRouter = SoundFlowAudioRouter.CreateBuilder()
             .WithAudioPacer(_audioPacer)
             .WithMicChunkHandler(chunk => _voiceAgentCore.ProcessIncomingAudioChunk(chunk))
             .WithCancellationTokenSource(_cts)
-            .WithInternalMicCapture(useInternalCapture)
+            .WithInternalMicCapture(!useDaemonCapture)
             .Build();
 
         await _audioRouter.InitializeAsync();
