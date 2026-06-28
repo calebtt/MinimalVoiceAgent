@@ -36,6 +36,25 @@ public class CleanSpeechDaemonProcessTests : IDisposable
     }
 
     [Fact]
+    public void BuildRunArguments_IncludesConfigWhenFileExists()
+    {
+        var config = Path.Combine(_dir, "agent.toml");
+        File.WriteAllText(config, "enable_vad = false\n");
+
+        var args = CleanSpeechDaemonProcess.BuildRunArguments(config);
+
+        Assert.StartsWith("run --config \"", args);
+        Assert.Contains("agent.toml", args);
+    }
+
+    [Fact]
+    public void BuildRunArguments_FallsBackWhenConfigMissing()
+    {
+        Assert.Equal("run", CleanSpeechDaemonProcess.BuildRunArguments(Path.Combine(_dir, "missing.toml")));
+        Assert.Equal("run", CleanSpeechDaemonProcess.BuildRunArguments(null));
+    }
+
+    [Fact]
     public void ResolveLaunchCommand_FallsBackToPythonModule()
     {
         var python = Path.Combine(VenvBin, "python");

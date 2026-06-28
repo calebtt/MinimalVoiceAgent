@@ -24,8 +24,7 @@ if [ ! -e "$CONFIG" ]; then
 fi
 
 echo
-echo "Done. The agent can now auto-start the daemon when sttsettings.json has:"
-echo '  "Capture": { "UseCleanSpeechDaemon": true, "AutoStartDaemon": true }'
+echo "Done. The agent auto-starts the daemon by default (see sttsettings.json Capture settings)."
 echo
 echo "Neural echo cancellers (dtln/nkf/hybrid) need extra deps in the daemon venv:"
 echo "  $DAEMON_DIR/.venv/bin/pip install onnxruntime torch"

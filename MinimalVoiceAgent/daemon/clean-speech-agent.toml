@@ -1,0 +1,82 @@
+# Bundled daemon profile for MinimalVoiceAgent capture.
+# Echo cancellation and noise suppression stay on; VAD is off so the agent's own
+# segmenter (DaemonGatedSpeechSegmenter or Silero) is the single utterance gate.
+
+[input]
+microphone = "auto"
+system_audio_reference = "auto"
+sample_rate = 48000
+channels = 1
+frame_ms = 20
+
+[processing]
+mode = "quality"
+max_latency_ms = 1500
+enable_highpass = true
+enable_reference_delay_align = true
+reference_delay_mode = "manual"
+reference_delay_ms = 0
+reference_max_delay_ms = 40
+reference_delay_smoothing = 0.85
+delay_window_ms = 300
+delay_update_min_ref_rms = 0.003
+delay_min_confidence = 0.15
+delay_median_frames = 15
+delay_calibrate_seconds = 10
+delay_cancellation_aware = true
+delay_fine_tune_ms = 15
+delay_target_residual_corr = 0.15
+enable_reference_level_match = false
+enable_echo_cancellation = true
+echo_canceller = "nlms"
+echo_filter_taps = 4096
+echo_step_size = 0.3
+echo_filter_leak = 0.0001
+echo_boundary_smoothing_samples = 64
+echo_step_size_warmup = 0.3
+echo_warmup_frames = 150
+reference_sync_latency_frames = 1.0
+reference_drift_compensation = false
+mic_delay_ms = 60
+# Noise suppression and speech enhancement are left OFF: the daemon's own README notes the
+# spectral suppressor can introduce robotic artifacts, and over-suppressed audio hurts STT
+# accuracy. This mirrors the daemon's recommended safe baseline (AEC + high-pass only). Turn
+# these on only after A/B-testing transcription quality.
+enable_noise_suppression = false
+enable_vad = false
+enable_speech_enhancement = false
+noise_reduction = 1.65
+spectral_floor = 0.035
+reference_gain_min = 0.05
+reference_gain_max = 20.0
+reference_gain_smoothing = 0.92
+reference_target_ratio = 1.0
+output_when_no_speech = "silence"
+silence_attenuation = 0.02
+
+[vad]
+threshold = 0.52
+pre_roll_ms = 300
+post_roll_ms = 600
+noise_learn_ms = 800
+
+[output]
+pipewire_virtual_source = true
+auto_load_pulse_pipe_source = true
+pulse_source_name = "clean_speech_microphone"
+pulse_source_description = "Clean Speech Microphone"
+fifo_path = "/tmp/clean-speech-daemon.pcm"
+# Must match Capture.SocketPath in MinimalVoiceAgent/sttsettings.json — the daemon publishes
+# here and the agent connects here. If you change one, change the other or auto-start can't connect.
+socket_path = "/tmp/clean-speech-daemon.sock"
+streams_socket_path = "/tmp/clean-speech-daemon-streams.sock"
+debug_wav_path = ""
+
+[diagnostics]
+enabled = true
+log_path = "/tmp/clean-speech-daemon-diagnostics.jsonl"
+status_path = "/tmp/clean-speech-daemon-status.json"
+interval_ms = 1000
+enable_stage_wavs = false
+stage_wav_dir = "/tmp/clean-speech-daemon-stages"
+print_interval_ms = 5000

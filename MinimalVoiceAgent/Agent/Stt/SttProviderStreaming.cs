@@ -26,6 +26,11 @@ public class CaptureConfig
     [JsonPropertyName("UseCleanSpeechDaemon")]
     public bool UseCleanSpeechDaemon { get; set; }
 
+    /// <summary>
+    /// Unix socket the agent connects to for cleaned audio. Must match the daemon profile's
+    /// <c>output.socket_path</c> (daemon/clean-speech-agent.toml) when auto-starting, since the
+    /// daemon publishes there and the agent connects here.
+    /// </summary>
     [JsonPropertyName("SocketPath")]
     public string SocketPath { get; set; } = "/tmp/clean-speech-daemon.sock";
 
@@ -40,6 +45,13 @@ public class CaptureConfig
     /// <summary>How long to wait for the daemon's socket to appear after auto-start.</summary>
     [JsonPropertyName("DaemonStartupTimeoutSeconds")]
     public int DaemonStartupTimeoutSeconds { get; set; } = 20;
+
+    /// <summary>
+    /// Daemon config passed to <c>run --config</c> on auto-start. Relative paths resolve from the
+    /// agent's base directory. Defaults to the bundled profile with VAD disabled.
+    /// </summary>
+    [JsonPropertyName("DaemonConfigPath")]
+    public string DaemonConfigPath { get; set; } = "daemon/clean-speech-agent.toml";
 }
 
 public static partial class Algos
