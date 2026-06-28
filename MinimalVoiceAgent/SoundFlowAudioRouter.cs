@@ -79,6 +79,7 @@ public class SoundFlowAudioRouter : IAsyncDisposable
 {
     private MiniAudioEngine? _soundEngine;
     private FullDuplexDevice? _duplexDevice;
+    private AudioPlaybackDevice? _playbackDevice;
     private TtsQueueDataProvider? _ttsQueueProvider;
     private SoundPlayer? _ttsPlayer;
     private Recorder? _micRecorder;
@@ -88,16 +89,18 @@ public class SoundFlowAudioRouter : IAsyncDisposable
     private readonly AudioPacer _audioPacer;
     private readonly Action<byte[]> _micChunkHandler;
     private readonly CancellationTokenSource _cts;
+    private readonly bool _useInternalMicCapture;
 
     private bool _isDisposed;
 
     private AudioFormat _workingFormat;
 
-    private SoundFlowAudioRouter(AudioPacer audioPacer, Action<byte[]> micChunkHandler, CancellationTokenSource cts)
+    private SoundFlowAudioRouter(AudioPacer audioPacer, Action<byte[]> micChunkHandler, CancellationTokenSource cts, bool useInternalMicCapture)
     {
         _audioPacer = audioPacer ?? throw new ArgumentNullException(nameof(audioPacer));
         _micChunkHandler = micChunkHandler ?? throw new ArgumentNullException(nameof(micChunkHandler));
         _cts = cts ?? throw new ArgumentNullException(nameof(cts));
+        _useInternalMicCapture = useInternalMicCapture;
     }
 
     public async Task InitializeAsync()
@@ -107,13 +110,22 @@ public class SoundFlowAudioRouter : IAsyncDisposable
         _soundEngine = new MiniAudioEngine();
         _soundEngine.UpdateDevicesInfo();
 
-        var captureInfo = _soundEngine.CaptureDevices.FirstOrDefault(d => d.IsDefault);
-        if (captureInfo == default)
-            captureInfo = _soundEngine.CaptureDevices.First();
-
         var renderInfo = _soundEngine.PlaybackDevices.FirstOrDefault(d => d.IsDefault);
         if (renderInfo == default)
             renderInfo = _soundEngine.PlaybackDevices.First();
+
+        if (!_useInternalMicCapture)
+        {
+            // Playback-only path: an external source (the clean-speech-daemon) provides cleaned
+            // microphone audio, so we open no capture device and run no WebRTC APM here — the
+            // daemon already performs echo cancellation and noise suppression.
+            await InitializePlaybackOnlyAsync(renderInfo);
+            return;
+        }
+
+        var captureInfo = _soundEngine.CaptureDevices.FirstOrDefault(d => d.IsDefault);
+        if (captureInfo == default)
+            captureInfo = _soundEngine.CaptureDevices.First();
 
         Log.Information("Using capture: {Cap} / render: {Ren}", captureInfo.Name, renderInfo.Name);
 
@@ -190,6 +202,27 @@ public class SoundFlowAudioRouter : IAsyncDisposable
         Log.Information("Audio initialized: {Rate}Hz {Ch}ch {Fmt}", _workingFormat.SampleRate, _workingFormat.Channels, _workingFormat.Format);
     }
 
+    private Task InitializePlaybackOnlyAsync(DeviceInfo renderInfo)
+    {
+        Log.Information("Using render: {Ren} (playback-only; external capture, WebRTC APM disabled)", renderInfo.Name);
+
+        _workingFormat = ProbePlaybackFormat(_soundEngine!, renderInfo);
+
+        _playbackDevice = _soundEngine!.InitializePlaybackDevice(renderInfo, _workingFormat);
+
+        _ttsQueueProvider = new TtsQueueDataProvider(_workingFormat);
+        _ttsPlayer = new SoundPlayer(_soundEngine, _workingFormat, _ttsQueueProvider);
+        _playbackDevice.MasterMixer.AddComponent(_ttsPlayer);
+        _ttsPlayer.Play();
+        _playbackDevice.Start();
+
+        _audioPacer.Initialize(chunk => _ttsQueueProvider.EnqueueChunk(chunk));
+
+        Log.Information("Audio initialized (playback-only): {Rate}Hz {Ch}ch {Fmt}",
+            _workingFormat.SampleRate, _workingFormat.Channels, _workingFormat.Format);
+        return Task.CompletedTask;
+    }
+
     public void EnqueueTtsChunk(byte[] pcmChunk)
     {
         if (_cts.IsCancellationRequested || pcmChunk == null || pcmChunk.Length == 0) return;
@@ -238,6 +271,37 @@ public class SoundFlowAudioRouter : IAsyncDisposable
         throw new InvalidOperationException("No compatible capture format found.");
     }
 
+    private static AudioFormat ProbePlaybackFormat(MiniAudioEngine engine, DeviceInfo renderInfo)
+    {
+        var formatsToTry = new[]
+        {
+            new AudioFormat { SampleRate = 16000, Channels = 1, Format = SampleFormat.S16 },  // Match the TTS/pipeline rate
+            new AudioFormat { SampleRate = 48000, Channels = 1, Format = SampleFormat.S16 },
+            new AudioFormat { SampleRate = 44100, Channels = 1, Format = SampleFormat.S16 },
+            new AudioFormat { SampleRate = 48000, Channels = 2, Format = SampleFormat.S16 },
+            new AudioFormat { SampleRate = 44100, Channels = 2, Format = SampleFormat.S16 },
+        };
+
+        foreach (var fmt in formatsToTry)
+        {
+            try
+            {
+                using var test = engine.InitializePlaybackDevice(renderInfo, fmt);
+                test.Start();
+                Thread.Sleep(200);
+                test.Stop();
+                Log.Information("Playback device accepted {0} Hz {1} ch {2}", fmt.SampleRate, fmt.Channels, fmt.Format);
+                return fmt;
+            }
+            catch (Exception ex)
+            {
+                Log.Warning("Playback rejected {0} Hz {1} ch {2}: {3}", fmt.SampleRate, fmt.Channels, fmt.Format, ex.Message);
+            }
+        }
+
+        throw new InvalidOperationException("No compatible playback format found.");
+    }
+
     private async Task ShutdownAsync()
     {
         try
@@ -251,6 +315,8 @@ public class SoundFlowAudioRouter : IAsyncDisposable
             _ttsPlayer?.Stop();
             _ttsPlayer?.Dispose();
             _ttsQueueProvider?.Dispose();
+            _playbackDevice?.Stop();
+            _playbackDevice?.Dispose();
             _duplexDevice?.Dispose();
             _audioPacer?.Dispose();
             _apmModifier?.Dispose();
@@ -341,10 +407,22 @@ public class SoundFlowAudioRouter : IAsyncDisposable
         private AudioPacer? _audioPacer;
         private Action<byte[]>? _micChunkHandler;
         private CancellationTokenSource? _cts;
+        private bool _useInternalMicCapture = true;
 
         public Builder WithAudioPacer(AudioPacer audioPacer)
         {
             _audioPacer = audioPacer;
+            return this;
+        }
+
+        /// <summary>
+        /// When false, the router opens no microphone and runs no WebRTC APM; it only plays TTS.
+        /// Use this when an external source (e.g. the clean-speech-daemon) supplies mic audio.
+        /// Defaults to true (the router captures and cleans the local microphone itself).
+        /// </summary>
+        public Builder WithInternalMicCapture(bool useInternalMicCapture)
+        {
+            _useInternalMicCapture = useInternalMicCapture;
             return this;
         }
 
@@ -366,7 +444,7 @@ public class SoundFlowAudioRouter : IAsyncDisposable
             if (_micChunkHandler == null) throw new InvalidOperationException("Mic chunk handler is required.");
             if (_cts == null) throw new InvalidOperationException("Cancellation token source is required.");
 
-            return new SoundFlowAudioRouter(_audioPacer, _micChunkHandler, _cts);
+            return new SoundFlowAudioRouter(_audioPacer, _micChunkHandler, _cts, _useInternalMicCapture);
         }
     }
 }
