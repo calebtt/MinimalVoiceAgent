@@ -38,9 +38,13 @@ echo_warmup_frames = 150
 reference_sync_latency_frames = 1.0
 reference_drift_compensation = false
 mic_delay_ms = 60
-enable_noise_suppression = true
+# Noise suppression and speech enhancement are left OFF: the daemon's own README notes the
+# spectral suppressor can introduce robotic artifacts, and over-suppressed audio hurts STT
+# accuracy. This mirrors the daemon's recommended safe baseline (AEC + high-pass only). Turn
+# these on only after A/B-testing transcription quality.
+enable_noise_suppression = false
 enable_vad = false
-enable_speech_enhancement = true
+enable_speech_enhancement = false
 noise_reduction = 1.65
 spectral_floor = 0.035
 reference_gain_min = 0.05
@@ -62,6 +66,8 @@ auto_load_pulse_pipe_source = true
 pulse_source_name = "clean_speech_microphone"
 pulse_source_description = "Clean Speech Microphone"
 fifo_path = "/tmp/clean-speech-daemon.pcm"
+# Must match Capture.SocketPath in MinimalVoiceAgent/sttsettings.json — the daemon publishes
+# here and the agent connects here. If you change one, change the other or auto-start can't connect.
 socket_path = "/tmp/clean-speech-daemon.sock"
 streams_socket_path = "/tmp/clean-speech-daemon-streams.sock"
 debug_wav_path = ""

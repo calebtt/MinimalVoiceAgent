@@ -24,14 +24,19 @@ public class SpeechToTextConfig
 public class CaptureConfig
 {
     [JsonPropertyName("UseCleanSpeechDaemon")]
-    public bool UseCleanSpeechDaemon { get; set; } = true;
+    public bool UseCleanSpeechDaemon { get; set; }
 
+    /// <summary>
+    /// Unix socket the agent connects to for cleaned audio. Must match the daemon profile's
+    /// <c>output.socket_path</c> (daemon/clean-speech-agent.toml) when auto-starting, since the
+    /// daemon publishes there and the agent connects here.
+    /// </summary>
     [JsonPropertyName("SocketPath")]
     public string SocketPath { get; set; } = "/tmp/clean-speech-daemon.sock";
 
     /// <summary>When true, the agent launches the bundled daemon itself (if not already running).</summary>
     [JsonPropertyName("AutoStartDaemon")]
-    public bool AutoStartDaemon { get; set; } = true;
+    public bool AutoStartDaemon { get; set; }
 
     /// <summary>Directory of the daemon (the <c>clean-speech</c> submodule), relative to the run directory.</summary>
     [JsonPropertyName("DaemonDirectory")]

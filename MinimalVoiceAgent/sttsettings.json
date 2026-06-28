@@ -1,9 +1,9 @@
 {
   "SttModelUrl": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en-q5_1.bin",
   "Capture": {
-    "UseCleanSpeechDaemon": true,
+    "UseCleanSpeechDaemon": false,
     "SocketPath": "/tmp/clean-speech-daemon.sock",
-    "AutoStartDaemon": true,
+    "AutoStartDaemon": false,
     "DaemonDirectory": "../clean-speech",
     "DaemonConfigPath": "daemon/clean-speech-agent.toml",
     "DaemonStartupTimeoutSeconds": 20
