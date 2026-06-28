@@ -147,8 +147,17 @@ public class Program
         // clean-speech-daemon (which removes system playback and noise) instead of capturing the
         // local microphone. On that path the router runs no WebRTC APM, since the daemon already
         // performs echo cancellation. If the daemon is unavailable, fall back to the local mic.
+        Log.Information(
+            "Capture config: UseCleanSpeechDaemon={Enabled}, AutoStartDaemon={Auto}, Socket={Socket}, DaemonDir={Dir}",
+            sttConfig.Capture.UseCleanSpeechDaemon, sttConfig.Capture.AutoStartDaemon,
+            sttConfig.Capture.SocketPath, sttConfig.Capture.DaemonDirectory);
+
         bool useInternalCapture = true;
-        if (sttConfig.Capture.UseCleanSpeechDaemon)
+        if (!sttConfig.Capture.UseCleanSpeechDaemon)
+        {
+            Log.Information("Microphone source: local microphone (clean-speech-daemon disabled in sttsettings.json).");
+        }
+        else
         {
             if (!CleanSpeechDaemonCaptureSource.IsPlatformSupported)
             {
