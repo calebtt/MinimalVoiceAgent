@@ -5,7 +5,6 @@ using System.ComponentModel;
 using System.Diagnostics; // For Process.Start
 using System.Globalization; // For invariant numeric parsing of stringified tool args
 using System.Management; // For system info
-using System.Reflection;
 using System.Runtime.InteropServices;
 using System.Text.Json;
 using System.Text.Json.Nodes;
@@ -92,7 +91,6 @@ public static partial class Algos
 /// <summary>
 /// Standalone class with tool functions tailored for common tasks on a nerdy man's computer.
 /// Focuses on local system operations like volume control, system info, timers, calculations, reminders, file ops, media automation, and more.
-/// TODO: Add the screen dimming feature from my app remote control tool.
 /// </summary>
 public class ComputerToolFunctions
 {
@@ -101,11 +99,6 @@ public class ComputerToolFunctions
     private readonly List<System.Timers.Timer> _activeTimers = new(); // For managing timers
     private readonly string _notificationLogPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "VoiceAgent", "notifications.log");
     private const int VolumeStep = 10; // Fixed step size for raise/lower (10% increments)
-    // Static fields for dynamic DLL loading (cached; assigned on first use in LoadDimmerDll)
-    private static Assembly _dimmerAssembly = null!;
-    private static Type _dimmerType = null!;
-    private static readonly string _dllPath = Path.Combine(AppDomain.CurrentDomain.BaseDirectory, "ScreenyDimmery.dll");  // Adjust path if DLL is elsewhere
-
 
     /// <summary>
     /// Primary constructor: Initializes the notification log directory.
@@ -113,118 +106,6 @@ public class ComputerToolFunctions
     public ComputerToolFunctions()
     {
         Directory.CreateDirectory(Path.GetDirectoryName(_notificationLogPath)!); // Ensure log dir
-    }
-
-    private static void LoadDimmerDll()
-    {
-        if (_dimmerAssembly != null) return;
-
-        try
-        {
-            _dimmerAssembly = Assembly.LoadFrom(_dllPath);
-            _dimmerType = _dimmerAssembly.GetType("ScreenyDimmery.Dimmer");
-            if (_dimmerType == null)
-                throw new TypeLoadException("Dimmer type not found in DLL.");
-        }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "Failed to load ScreenyDimmery.dll from {Path}.", _dllPath);
-            throw;
-        }
-    }
-
-    private static void InvokeDimmerMethod(string methodName, params object[] args)
-    {
-        LoadDimmerDll();
-        var method = _dimmerType.GetMethod(methodName);
-        if (method == null)
-            throw new MissingMethodException($"Method {methodName} not found in Dimmer.");
-
-        method.Invoke(null, args);  // Static methods, no instance
-    }
-
-    private static object InvokeDimmerMethodWithReturn(string methodName, params object[] args)
-    {
-        LoadDimmerDll();
-        var method = _dimmerType.GetMethod(methodName);
-        if (method == null)
-            throw new MissingMethodException($"Method {methodName} not found in Dimmer.");
-
-        return method.Invoke(null, args);
-    }
-
-    [KernelFunction("set_screen_dimming")]
-    [Description("Set the screen dimming level (0.1 to 1.0 for 10% to 100% dimness reduction). Clamps to min 10%. Displays brief label on change. Windows only.")]
-    public virtual async Task<string> SetScreenDimmingAsync(
-        [Description("Dimming level as a decimal string between \"0.1\" and \"1.0\" (e.g., \"0.5\" for 50%)")] string level)
-    {
-        try
-        {
-            // Pass as a string and parse here: xAI's strict tool calling rejects non-string
-            // required parameters with a 422, so all tool args are kept as strings.
-            if (!float.TryParse(level, NumberStyles.Float, CultureInfo.InvariantCulture, out var parsedLevel))
-                return JsonSerializer.Serialize(new { error = "Invalid argument", details = $"level '{level}' is not a number." }, _jsonOptions);
-
-            if (parsedLevel < 0.1f || parsedLevel > 1.0f)
-                throw new ArgumentOutOfRangeException(nameof(level), "Level must be between 0.1 and 1.0.");
-
-            InvokeDimmerMethod("SetSingleMonitorOverlayBrightness", parsedLevel);
-
-            string message = $"Screen dimming set to {parsedLevel * 100}%.";
-            Log.Information(message);
-
-            await Task.CompletedTask;
-
-            return JsonSerializer.Serialize(new { status = "success", message }, _jsonOptions);
-        }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "Set dimming failed for level {Level}.", level);
-            return JsonSerializer.Serialize(new { error = "Execution failed", details = ex.Message }, _jsonOptions);
-        }
-    }
-
-    [KernelFunction("get_screen_dimming")]
-    [Description("Retrieve the current screen dimming level (0.1-1.0). Windows only.")]
-    public virtual async Task<string> GetScreenDimmingAsync()
-    {
-        try
-        {
-            float level = (float)InvokeDimmerMethodWithReturn("GetCurrentBrightnessPercent");
-
-            string message = $"Current screen dimming level: {level * 100}%.";
-            Log.Information(message);
-
-            await Task.CompletedTask;
-
-            return JsonSerializer.Serialize(new { status = "success", level, message }, _jsonOptions);
-        }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "Get dimming failed.");
-            return JsonSerializer.Serialize(new { error = "Execution failed", details = ex.Message }, _jsonOptions);
-        }
-    }
-
-    [KernelFunction("turn_off_screen_dimming")]
-    [Description("Turn off screen dimming (resets to max brightness). Windows only.")]
-    public virtual async Task<string> TurnOffScreenDimmingAsync()
-    {
-        try
-        {
-            InvokeDimmerMethod("DestroySingleMonitorOverlay");
-
-            Log.Information("Screen dimming turned off.");
-
-            await Task.CompletedTask;
-
-            return JsonSerializer.Serialize(new { status = "success", message = "Screen dimming turned off." }, _jsonOptions);
-        }
-        catch (Exception ex)
-        {
-            Log.Error(ex, "Turn off dimming failed.");
-            return JsonSerializer.Serialize(new { error = "Execution failed", details = ex.Message }, _jsonOptions);
-        }
     }
 
     [KernelFunction("get_current_datetime")]

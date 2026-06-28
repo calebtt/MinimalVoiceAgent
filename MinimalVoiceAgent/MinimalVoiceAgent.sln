@@ -7,8 +7,6 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MinimalVoiceAgent", "Minima
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MinimalSileroVAD.Core", "..\MinimalSileroVad\MinimalSileroVAD.Core\MinimalSileroVAD.Core.csproj", "{9233E94B-0318-CC8B-77BC-B620649A03AB}"
 EndProject
-Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "ScreenyDimmery", "..\ScreenyDimmery\ScreenyDimmery\ScreenyDimmery.vcxproj", "{4BE034A9-37C4-8658-186E-C502F8CE8194}"
-EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MinimalTextClassifierTrainAndTest", "..\MinimalTextClassifier\MinimalTextClassifierTrainAndTest.csproj", "{1EDE1A18-D32B-9AEE-187A-49D882725EB7}"
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "MinimalVoiceAgent.Tests", "..\MinimalVoiceAgent.Tests\MinimalVoiceAgent.Tests.csproj", "{D96084E0-EE99-4193-BDAE-2E3B6B2D84FD}"
@@ -47,18 +45,6 @@ Global
 		{9233E94B-0318-CC8B-77BC-B620649A03AB}.Release|x64.Build.0 = Release|Any CPU
 		{9233E94B-0318-CC8B-77BC-B620649A03AB}.Release|x86.ActiveCfg = Release|Any CPU
 		{9233E94B-0318-CC8B-77BC-B620649A03AB}.Release|x86.Build.0 = Release|Any CPU
-		{4BE034A9-37C4-8658-186E-C502F8CE8194}.Debug|Any CPU.ActiveCfg = Debug|x64
-		{4BE034A9-37C4-8658-186E-C502F8CE8194}.Debug|Any CPU.Build.0 = Debug|x64
-		{4BE034A9-37C4-8658-186E-C502F8CE8194}.Debug|x64.ActiveCfg = Debug|x64
-		{4BE034A9-37C4-8658-186E-C502F8CE8194}.Debug|x64.Build.0 = Debug|x64
-		{4BE034A9-37C4-8658-186E-C502F8CE8194}.Debug|x86.ActiveCfg = Debug|Win32
-		{4BE034A9-37C4-8658-186E-C502F8CE8194}.Debug|x86.Build.0 = Debug|Win32
-		{4BE034A9-37C4-8658-186E-C502F8CE8194}.Release|Any CPU.ActiveCfg = Release|x64
-		{4BE034A9-37C4-8658-186E-C502F8CE8194}.Release|Any CPU.Build.0 = Release|x64
-		{4BE034A9-37C4-8658-186E-C502F8CE8194}.Release|x64.ActiveCfg = Release|x64
-		{4BE034A9-37C4-8658-186E-C502F8CE8194}.Release|x64.Build.0 = Release|x64
-		{4BE034A9-37C4-8658-186E-C502F8CE8194}.Release|x86.ActiveCfg = Release|Win32
-		{4BE034A9-37C4-8658-186E-C502F8CE8194}.Release|x86.Build.0 = Release|Win32
 		{1EDE1A18-D32B-9AEE-187A-49D882725EB7}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
 		{1EDE1A18-D32B-9AEE-187A-49D882725EB7}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{1EDE1A18-D32B-9AEE-187A-49D882725EB7}.Debug|x64.ActiveCfg = Debug|Any CPU

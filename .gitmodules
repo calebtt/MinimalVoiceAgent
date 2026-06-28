@@ -8,3 +8,6 @@
 [submodule "MinimalTextClassifier"]
 	path = MinimalTextClassifier
 	url = https://github.com/calebtt/MinimalTextClassifier
+[submodule "clean-speech"]
+	path = clean-speech
+	url = https://github.com/calebtt/clean-speech.git

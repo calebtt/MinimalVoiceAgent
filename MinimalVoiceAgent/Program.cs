@@ -94,11 +94,11 @@ public class Program
     private static readonly AudioProcessingConfig _audioConfig = AudioProcessingConfig.CreateDefault();
     private static AudioPacer? _audioPacer;
     private static SoundFlowAudioRouter? _audioRouter;
+    private static CleanSpeechDaemonCaptureSource? _cleanSpeechSource;
+    private static CleanSpeechDaemonProcess? _cleanSpeechDaemon;
 
     public static async Task Main(string[] args)
     {
-        // TODO verify env. var. for api key exists, if not, create it and prompt user for value.
-
         Algos.AddConsoleLogger();
 
         var lmConfig = await Algos.LoadLanguageModelConfigAsync("profiles/personal.json");
@@ -111,7 +111,7 @@ public class Program
         {
             Log.Fatal("Startup check failed: {Message}", modelCheck.Message);
             await Console.Error.WriteLineAsync($"Startup check failed: {modelCheck.Message}");
-            return;
+            Environment.Exit(1);
         }
         Log.Information("Startup check passed: {Message}", modelCheck.Message);
 
@@ -143,10 +143,77 @@ public class Program
             .WithVadSegmenter(vad)
             .Build();
 
+        // Microphone source selection. When enabled, consume cleaned audio from the external
+        // clean-speech-daemon (which removes system playback and noise) instead of capturing the
+        // local microphone. On that path the router runs no WebRTC APM, since the daemon already
+        // performs echo cancellation. If the daemon is unavailable, fall back to the local mic.
+        Log.Information(
+            "Capture config: UseCleanSpeechDaemon={Enabled}, AutoStartDaemon={Auto}, Socket={Socket}, DaemonDir={Dir}",
+            sttConfig.Capture.UseCleanSpeechDaemon, sttConfig.Capture.AutoStartDaemon,
+            sttConfig.Capture.SocketPath, sttConfig.Capture.DaemonDirectory);
+
+        bool useInternalCapture = true;
+        if (!sttConfig.Capture.UseCleanSpeechDaemon)
+        {
+            Log.Information("Microphone source: local microphone (clean-speech-daemon disabled in sttsettings.json).");
+        }
+        else
+        {
+            if (!CleanSpeechDaemonCaptureSource.IsPlatformSupported)
+            {
+                Log.Warning(
+                    "clean-speech-daemon capture requires Linux or macOS; falling back to the local microphone (with APM).");
+            }
+            else
+            {
+                // Optionally launch the bundled daemon ourselves before connecting.
+                if (sttConfig.Capture.AutoStartDaemon)
+                {
+                    try
+                    {
+                        var daemon = new CleanSpeechDaemonProcess(sttConfig.Capture.DaemonDirectory, sttConfig.Capture.SocketPath);
+                        bool started = await daemon.EnsureStartedAsync(
+                            TimeSpan.FromSeconds(sttConfig.Capture.DaemonStartupTimeoutSeconds), _cts.Token);
+                        if (started)
+                            _cleanSpeechDaemon = daemon;          // we own it; stop it on shutdown
+                        else
+                            await daemon.DisposeAsync();           // already running; leave it alone
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warning(ex, "Failed to auto-start clean-speech-daemon; will try to connect to an existing instance.");
+                    }
+                }
+
+                var source = new CleanSpeechDaemonCaptureSource(sttConfig.Capture.SocketPath);
+                try
+                {
+                    await source.StartAsync(chunk => _voiceAgentCore.ProcessIncomingAudioChunk(chunk), _cts.Token);
+                    _cleanSpeechSource = source;
+                    useInternalCapture = false;
+                    Log.Information(
+                        "Microphone source: clean-speech-daemon ({Path}). Internal capture and APM disabled.",
+                        sttConfig.Capture.SocketPath);
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex,
+                        "clean-speech-daemon capture unavailable; falling back to the local microphone (with APM).");
+                    await source.DisposeAsync();
+                    if (_cleanSpeechDaemon != null)
+                    {
+                        await _cleanSpeechDaemon.DisposeAsync();   // we started it but can't use it; stop it
+                        _cleanSpeechDaemon = null;
+                    }
+                }
+            }
+        }
+
         _audioRouter = SoundFlowAudioRouter.CreateBuilder()
             .WithAudioPacer(_audioPacer)
             .WithMicChunkHandler(chunk => _voiceAgentCore.ProcessIncomingAudioChunk(chunk))
             .WithCancellationTokenSource(_cts)
+            .WithInternalMicCapture(useInternalCapture)
             .Build();
 
         await _audioRouter.InitializeAsync();
@@ -164,6 +231,18 @@ public class Program
     private static async Task ShutdownAsync()
     {
         await _cts.CancelAsync();
+
+        // Stop the external capture source first so no more mic chunks arrive
+        if (_cleanSpeechSource != null)
+        {
+            await _cleanSpeechSource.DisposeAsync();
+        }
+
+        // Stop the daemon if we started it
+        if (_cleanSpeechDaemon != null)
+        {
+            await _cleanSpeechDaemon.DisposeAsync();
+        }
 
         // Now safe to shut down core
         if (_voiceAgentCore != null)
