@@ -95,6 +95,7 @@ public class Program
     private static AudioPacer? _audioPacer;
     private static SoundFlowAudioRouter? _audioRouter;
     private static CleanSpeechDaemonCaptureSource? _cleanSpeechSource;
+    private static CleanSpeechDaemonProcess? _cleanSpeechDaemon;
 
     public static async Task Main(string[] args)
     {
@@ -156,6 +157,25 @@ public class Program
             }
             else
             {
+                // Optionally launch the bundled daemon ourselves before connecting.
+                if (sttConfig.Capture.AutoStartDaemon)
+                {
+                    try
+                    {
+                        var daemon = new CleanSpeechDaemonProcess(sttConfig.Capture.DaemonDirectory, sttConfig.Capture.SocketPath);
+                        bool started = await daemon.EnsureStartedAsync(
+                            TimeSpan.FromSeconds(sttConfig.Capture.DaemonStartupTimeoutSeconds), _cts.Token);
+                        if (started)
+                            _cleanSpeechDaemon = daemon;          // we own it; stop it on shutdown
+                        else
+                            await daemon.DisposeAsync();           // already running; leave it alone
+                    }
+                    catch (Exception ex)
+                    {
+                        Log.Warning(ex, "Failed to auto-start clean-speech-daemon; will try to connect to an existing instance.");
+                    }
+                }
+
                 var source = new CleanSpeechDaemonCaptureSource(sttConfig.Capture.SocketPath);
                 try
                 {
@@ -171,6 +191,11 @@ public class Program
                     Log.Warning(ex,
                         "clean-speech-daemon capture unavailable; falling back to the local microphone (with APM).");
                     await source.DisposeAsync();
+                    if (_cleanSpeechDaemon != null)
+                    {
+                        await _cleanSpeechDaemon.DisposeAsync();   // we started it but can't use it; stop it
+                        _cleanSpeechDaemon = null;
+                    }
                 }
             }
         }
@@ -202,6 +227,12 @@ public class Program
         if (_cleanSpeechSource != null)
         {
             await _cleanSpeechSource.DisposeAsync();
+        }
+
+        // Stop the daemon if we started it
+        if (_cleanSpeechDaemon != null)
+        {
+            await _cleanSpeechDaemon.DisposeAsync();
         }
 
         // Now safe to shut down core

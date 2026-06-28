@@ -2,6 +2,9 @@
   "SttModelUrl": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en-q5_1.bin",
   "Capture": {
     "UseCleanSpeechDaemon": false,
-    "SocketPath": "/tmp/clean-speech-daemon.sock"
+    "SocketPath": "/tmp/clean-speech-daemon.sock",
+    "AutoStartDaemon": false,
+    "DaemonDirectory": "../clean-speech",
+    "DaemonStartupTimeoutSeconds": 20
   }
 }

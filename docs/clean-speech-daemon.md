@@ -1,7 +1,8 @@
 # Clean-Speech-Daemon Capture
 
-The agent can take its microphone audio from the external
-[`clean-speech-daemon`](https://github.com/calebtt/clean-speech-daemon) instead of capturing the local mic directly.
+The agent can take its microphone audio from the
+[`clean-speech-daemon`](https://github.com/calebtt/clean-speech) (bundled as the `clean-speech`
+submodule) instead of capturing the local mic directly.
 The daemon references the **system playback monitor**, so it removes *all* speaker output
 (the agent's own TTS, music, video, any app) plus background noise before the audio reaches STT —
 something the agent's built-in WebRTC APM cannot do, because APM's only echo reference is the
@@ -20,31 +21,53 @@ When this source is active, `SoundFlowAudioRouter` runs in **playback-only** mod
 microphone and constructs **no WebRTC APM**, since the daemon already performs echo cancellation
 and noise suppression. SoundFlow is used only to play TTS.
 
+## One-time setup
+
+The daemon is a Python service bundled as a submodule. Initialize it and create its virtualenv:
+
+```bash
+git submodule update --init clean-speech
+scripts/setup-clean-speech-daemon.sh
+```
+
+The setup script creates `clean-speech/.venv`, installs the daemon into it, and writes a default
+daemon config if you don't already have one. (Neural echo cancellers need extra deps — the script
+prints the one-liner to add them.)
+
 ## Enabling it
 
-1. Run the daemon (see its repo): `clean-speech-daemon run`. It publishes the cleaned stream on
-   `/tmp/clean-speech-daemon.sock`.
-2. In `MinimalVoiceAgent/sttsettings.json`:
+In `MinimalVoiceAgent/sttsettings.json`:
 
-   ```json
-   "Capture": {
-     "UseCleanSpeechDaemon": true,
-     "SocketPath": "/tmp/clean-speech-daemon.sock"
-   }
-   ```
+```json
+"Capture": {
+  "UseCleanSpeechDaemon": true,
+  "AutoStartDaemon": true,
+  "SocketPath": "/tmp/clean-speech-daemon.sock",
+  "DaemonDirectory": "../clean-speech",
+  "DaemonStartupTimeoutSeconds": 20
+}
+```
 
-3. Start the agent. You should see:
+- **`AutoStartDaemon: true`** — the agent launches the daemon itself (from `DaemonDirectory/.venv`),
+  waits for its socket, and stops it on shutdown. If a daemon is already running, the agent uses it
+  and leaves it alone.
+- **`AutoStartDaemon: false`** — start it yourself (`clean-speech/.venv/bin/clean-speech-daemon run`)
+  and the agent just connects.
 
-   ```
-   clean-speech-daemon connected: 48000 Hz 1 ch s16le -> resampling to 16000 Hz
-   Microphone source: clean-speech-daemon (...). Internal capture and APM disabled.
-   Audio initialized (playback-only): 16000Hz 1ch S16
-   ```
+On startup you should see:
 
-If the socket is unavailable at startup, the agent logs a warning and **falls back to the local
-microphone** (with the built-in APM), so it still runs without the daemon. If the daemon
-disconnects mid-session, the capture source **reconnects automatically** with exponential backoff.
-Default is off. Requires Linux or macOS (Unix domain sockets).
+```
+Starting clean-speech-daemon: .../clean-speech/.venv/bin/clean-speech-daemon run
+clean-speech-daemon is up (socket /tmp/clean-speech-daemon.sock).
+clean-speech-daemon connected: 48000 Hz 1 ch s16le -> resampling to 16000 Hz
+Microphone source: clean-speech-daemon (...). Internal capture and APM disabled.
+Audio initialized (playback-only): 16000Hz 1ch S16
+```
+
+If the daemon can't be started or reached, the agent logs a warning and **falls back to the local
+microphone** (with the built-in APM), so it still runs without the daemon. If the daemon disconnects
+mid-session, the capture source **reconnects automatically** with exponential backoff. Default is
+off. Requires Linux or macOS (Unix domain sockets).
 
 ## Notes
 
