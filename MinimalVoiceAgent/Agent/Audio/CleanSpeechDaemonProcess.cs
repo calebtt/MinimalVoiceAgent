@@ -1,12 +1,14 @@
 using Serilog;
 using System.Diagnostics;
+using System.Net.Sockets;
 
 namespace MinimalVoiceAgent;
 
 /// <summary>
 /// Optionally launches and supervises the external <c>clean-speech-daemon</c> process (bundled as
-/// the <c>clean-speech</c> submodule). If a daemon is already running (its socket exists) this does
-/// nothing and reports that it does not own the process. When it does start the daemon, it waits for
+/// the <c>clean-speech</c> submodule). If a daemon is already running (its socket accepts
+/// connections) this does nothing and reports that it does not own the process. Stale socket files
+/// left after a crash are ignored. When it does start the daemon, it waits for
 /// the socket to appear and terminates the process on disposal.
 /// </summary>
 public sealed class CleanSpeechDaemonProcess : IAsyncDisposable
@@ -33,10 +35,17 @@ public sealed class CleanSpeechDaemonProcess : IAsyncDisposable
     /// </summary>
     public async Task<bool> EnsureStartedAsync(TimeSpan timeout, CancellationToken ct)
     {
+        if (IsSocketLive(_socketPath))
+        {
+            Log.Information("clean-speech-daemon already running (socket {Path} accepting connections); not starting another.", _socketPath);
+            return false;
+        }
+
         if (File.Exists(_socketPath))
         {
-            Log.Information("clean-speech-daemon already running (socket {Path} present); not starting another.", _socketPath);
-            return false;
+            Log.Warning(
+                "clean-speech-daemon socket {Path} exists but is not accepting connections (stale); starting a fresh daemon.",
+                _socketPath);
         }
 
         var dir = Path.GetFullPath(_workingDirectory);
@@ -97,12 +106,37 @@ public sealed class CleanSpeechDaemonProcess : IAsyncDisposable
         return $"run --config \"{fullPath}\"";
     }
 
+    /// <summary>Returns true when a Unix socket path has a live listener (not a stale file).</summary>
+    internal static bool IsSocketLive(string socketPath)
+    {
+        if (string.IsNullOrWhiteSpace(socketPath) || !File.Exists(socketPath))
+            return false;
+
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+            return true;
+
+        try
+        {
+            using var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+            socket.Connect(new UnixDomainSocketEndPoint(socketPath));
+            return true;
+        }
+        catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionRefused)
+        {
+            return false;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
     private async Task WaitForSocketAsync(TimeSpan timeout, CancellationToken ct)
     {
         var deadline = DateTime.UtcNow + timeout;
         while (DateTime.UtcNow < deadline)
         {
-            if (File.Exists(_socketPath))
+            if (IsSocketLive(_socketPath))
                 return;
             if (_process is { HasExited: true })
                 throw new InvalidOperationException($"clean-speech-daemon exited early (code {_process.ExitCode}) before publishing its socket.");

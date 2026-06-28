@@ -1,3 +1,4 @@
+using System.Net.Sockets;
 using Xunit;
 
 namespace MinimalVoiceAgent.Tests;
@@ -78,5 +79,37 @@ public class CleanSpeechDaemonProcessTests : IDisposable
     {
         Assert.Throws<ArgumentException>(() => new CleanSpeechDaemonProcess("  ", "/tmp/x.sock"));
         Assert.Throws<ArgumentException>(() => new CleanSpeechDaemonProcess("/tmp/dir", " "));
+    }
+
+    [Fact]
+    public void IsSocketLive_ReturnsFalseForMissingPath()
+    {
+        Assert.False(CleanSpeechDaemonProcess.IsSocketLive(Path.Combine(_dir, "missing.sock")));
+    }
+
+    [Fact]
+    public void IsSocketLive_ReturnsFalseForStaleSocketFile()
+    {
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+            return;
+
+        var stale = Path.Combine(_dir, "stale.sock");
+        File.WriteAllText(stale, string.Empty);
+
+        Assert.False(CleanSpeechDaemonProcess.IsSocketLive(stale));
+    }
+
+    [Fact]
+    public void IsSocketLive_ReturnsTrueForListeningSocket()
+    {
+        if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
+            return;
+
+        var path = Path.Combine(_dir, "live.sock");
+        using var server = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+        server.Bind(new UnixDomainSocketEndPoint(path));
+        server.Listen(1);
+
+        Assert.True(CleanSpeechDaemonProcess.IsSocketLive(path));
     }
 }
