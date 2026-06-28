@@ -34,9 +34,9 @@ The setup script creates `clean-speech/.venv`, installs the daemon into it, and 
 daemon config if you don't already have one. (Neural echo cancellers need extra deps — the script
 prints the one-liner to add them.)
 
-## Enabling it
+## Configuration
 
-In `MinimalVoiceAgent/sttsettings.json`:
+Daemon capture and auto-start are **on by default** in `sttsettings.json`:
 
 ```json
 "Capture": {
@@ -48,11 +48,12 @@ In `MinimalVoiceAgent/sttsettings.json`:
 }
 ```
 
-- **`AutoStartDaemon: true`** — the agent launches the daemon itself (from `DaemonDirectory/.venv`),
+- **`AutoStartDaemon: true`** (default) — the agent launches the daemon itself (from `DaemonDirectory/.venv`),
   waits for its socket, and stops it on shutdown. If a daemon is already running, the agent uses it
   and leaves it alone.
 - **`AutoStartDaemon: false`** — start it yourself (`clean-speech/.venv/bin/clean-speech-daemon run`)
   and the agent just connects.
+- Set **`UseCleanSpeechDaemon: false`** to use the local microphone with WebRTC APM instead.
 
 On startup you should see:
 
@@ -66,8 +67,8 @@ Audio initialized (playback-only): 16000Hz 1ch S16
 
 If the daemon can't be started or reached, the agent logs a warning and **falls back to the local
 microphone** (with the built-in APM), so it still runs without the daemon. If the daemon disconnects
-mid-session, the capture source **reconnects automatically** with exponential backoff. Default is
-off. Requires Linux or macOS (Unix domain sockets).
+mid-session, the capture source **reconnects automatically** with exponential backoff. Requires
+Linux or macOS (Unix domain sockets).
 
 ## Notes
 
