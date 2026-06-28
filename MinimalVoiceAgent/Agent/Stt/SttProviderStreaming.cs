@@ -11,6 +11,23 @@ public class SpeechToTextConfig
 {
     [JsonPropertyName("SttModelUrl")]
     public string SttModelUrl { get; set; } = string.Empty;
+
+    [JsonPropertyName("Capture")]
+    public CaptureConfig Capture { get; set; } = new();
+}
+
+/// <summary>
+/// Microphone capture settings. When <see cref="UseCleanSpeechDaemon"/> is enabled the agent
+/// consumes cleaned audio from the external clean-speech-daemon over its Unix socket instead of
+/// capturing the local microphone directly.
+/// </summary>
+public class CaptureConfig
+{
+    [JsonPropertyName("UseCleanSpeechDaemon")]
+    public bool UseCleanSpeechDaemon { get; set; }
+
+    [JsonPropertyName("SocketPath")]
+    public string SocketPath { get; set; } = "/tmp/clean-speech-daemon.sock";
 }
 
 public static partial class Algos

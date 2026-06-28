@@ -94,6 +94,7 @@ public class Program
     private static readonly AudioProcessingConfig _audioConfig = AudioProcessingConfig.CreateDefault();
     private static AudioPacer? _audioPacer;
     private static SoundFlowAudioRouter? _audioRouter;
+    private static CleanSpeechDaemonCaptureSource? _cleanSpeechSource;
 
     public static async Task Main(string[] args)
     {
@@ -143,10 +144,34 @@ public class Program
             .WithVadSegmenter(vad)
             .Build();
 
+        // Microphone source selection. When enabled, consume cleaned audio from the external
+        // clean-speech-daemon (which removes system playback and noise) instead of capturing the
+        // local microphone. On that path the router runs no WebRTC APM, since the daemon already
+        // performs echo cancellation. If the daemon is unavailable, fall back to the local mic.
+        bool useInternalCapture = true;
+        if (sttConfig.Capture.UseCleanSpeechDaemon)
+        {
+            var source = new CleanSpeechDaemonCaptureSource(sttConfig.Capture.SocketPath);
+            try
+            {
+                await source.StartAsync(chunk => _voiceAgentCore.ProcessIncomingAudioChunk(chunk), _cts.Token);
+                _cleanSpeechSource = source;
+                useInternalCapture = false;
+                Log.Information("Microphone source: clean-speech-daemon ({Path}). Internal capture and APM disabled.",
+                    sttConfig.Capture.SocketPath);
+            }
+            catch (Exception ex)
+            {
+                Log.Warning(ex, "clean-speech-daemon capture unavailable; falling back to the local microphone (with APM).");
+                await source.DisposeAsync();
+            }
+        }
+
         _audioRouter = SoundFlowAudioRouter.CreateBuilder()
             .WithAudioPacer(_audioPacer)
             .WithMicChunkHandler(chunk => _voiceAgentCore.ProcessIncomingAudioChunk(chunk))
             .WithCancellationTokenSource(_cts)
+            .WithInternalMicCapture(useInternalCapture)
             .Build();
 
         await _audioRouter.InitializeAsync();
@@ -164,6 +189,12 @@ public class Program
     private static async Task ShutdownAsync()
     {
         await _cts.CancelAsync();
+
+        // Stop the external capture source first so no more mic chunks arrive
+        if (_cleanSpeechSource != null)
+        {
+            await _cleanSpeechSource.DisposeAsync();
+        }
 
         // Now safe to shut down core
         if (_voiceAgentCore != null)

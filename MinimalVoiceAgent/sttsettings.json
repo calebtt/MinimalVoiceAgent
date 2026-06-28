@@ -1,3 +1,7 @@
 {
-  "SttModelUrl": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en-q5_1.bin"
+  "SttModelUrl": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.en-q5_1.bin",
+  "Capture": {
+    "UseCleanSpeechDaemon": false,
+    "SocketPath": "/tmp/clean-speech-daemon.sock"
+  }
 }
