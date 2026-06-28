@@ -68,4 +68,30 @@ public class CleanSpeechDaemonCaptureSourceTests
         await Assert.ThrowsAsync<EndOfStreamException>(
             () => CleanSpeechDaemonCaptureSource.ReadHeaderLineAsync(stream, CancellationToken.None));
     }
+
+    [Fact]
+    public async Task ReadHeaderLineAsync_ThrowsWhenHeaderExceedsMaxLengthWithoutNewline()
+    {
+        var oversized = new byte[CleanSpeechDaemonCaptureSource.MaxHeaderBytes];
+        Array.Fill(oversized, (byte)'x');
+        using var stream = new MemoryStream(oversized);
+
+        await Assert.ThrowsAsync<InvalidDataException>(
+            () => CleanSpeechDaemonCaptureSource.ReadHeaderLineAsync(stream, CancellationToken.None));
+    }
+
+    [Fact]
+    public void Constructor_RejectsBlankSocketPath()
+    {
+        Assert.Throws<ArgumentException>(() => new CleanSpeechDaemonCaptureSource("  "));
+    }
+
+    [Fact]
+    public void IsPlatformSupported_IsTrueOnLinux()
+    {
+        if (!OperatingSystem.IsLinux())
+            return;
+
+        Assert.True(CleanSpeechDaemonCaptureSource.IsPlatformSupported);
+    }
 }

@@ -265,7 +265,7 @@
     "ToolInstructions": [
       {
         "toolName": "set_screen_dimming",
-        "guidance": "Invoke on 'dim screen to X%' or similar. Use level as fraction (e.g., 0.5 for 50%). Confirm: 'Screen dimmed to X%. Done.' If off requested, use level=0.0.",
+        "guidance": "Invoke on 'dim screen to X%' or similar. Use level as a decimal string between \"0.1\" and \"1.0\" (e.g., \"0.5\" for 50%). Confirm: 'Screen dimmed to X%. Done.' If off requested, use turn_off_screen_dimming instead.",
         "priority": 1
       },
       {

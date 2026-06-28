@@ -98,8 +98,6 @@ public class Program
 
     public static async Task Main(string[] args)
     {
-        // TODO verify env. var. for api key exists, if not, create it and prompt user for value.
-
         Algos.AddConsoleLogger();
 
         var lmConfig = await Algos.LoadLanguageModelConfigAsync("profiles/personal.json");
@@ -112,7 +110,7 @@ public class Program
         {
             Log.Fatal("Startup check failed: {Message}", modelCheck.Message);
             await Console.Error.WriteLineAsync($"Startup check failed: {modelCheck.Message}");
-            return;
+            Environment.Exit(1);
         }
         Log.Information("Startup check passed: {Message}", modelCheck.Message);
 
@@ -151,19 +149,29 @@ public class Program
         bool useInternalCapture = true;
         if (sttConfig.Capture.UseCleanSpeechDaemon)
         {
-            var source = new CleanSpeechDaemonCaptureSource(sttConfig.Capture.SocketPath);
-            try
+            if (!CleanSpeechDaemonCaptureSource.IsPlatformSupported)
             {
-                await source.StartAsync(chunk => _voiceAgentCore.ProcessIncomingAudioChunk(chunk), _cts.Token);
-                _cleanSpeechSource = source;
-                useInternalCapture = false;
-                Log.Information("Microphone source: clean-speech-daemon ({Path}). Internal capture and APM disabled.",
-                    sttConfig.Capture.SocketPath);
+                Log.Warning(
+                    "clean-speech-daemon capture requires Linux or macOS; falling back to the local microphone (with APM).");
             }
-            catch (Exception ex)
+            else
             {
-                Log.Warning(ex, "clean-speech-daemon capture unavailable; falling back to the local microphone (with APM).");
-                await source.DisposeAsync();
+                var source = new CleanSpeechDaemonCaptureSource(sttConfig.Capture.SocketPath);
+                try
+                {
+                    await source.StartAsync(chunk => _voiceAgentCore.ProcessIncomingAudioChunk(chunk), _cts.Token);
+                    _cleanSpeechSource = source;
+                    useInternalCapture = false;
+                    Log.Information(
+                        "Microphone source: clean-speech-daemon ({Path}). Internal capture and APM disabled.",
+                        sttConfig.Capture.SocketPath);
+                }
+                catch (Exception ex)
+                {
+                    Log.Warning(ex,
+                        "clean-speech-daemon capture unavailable; falling back to the local microphone (with APM).");
+                    await source.DisposeAsync();
+                }
             }
         }
 

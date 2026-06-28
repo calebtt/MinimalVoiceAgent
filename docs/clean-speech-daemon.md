@@ -1,7 +1,7 @@
 # Clean-Speech-Daemon Capture
 
 The agent can take its microphone audio from the external
-[`clean-speech-daemon`](https://github.com/calebtt) instead of capturing the local mic directly.
+[`clean-speech-daemon`](https://github.com/calebtt/clean-speech-daemon) instead of capturing the local mic directly.
 The daemon references the **system playback monitor**, so it removes *all* speaker output
 (the agent's own TTS, music, video, any app) plus background noise before the audio reaches STT —
 something the agent's built-in WebRTC APM cannot do, because APM's only echo reference is the
@@ -42,7 +42,9 @@ and noise suppression. SoundFlow is used only to play TTS.
    ```
 
 If the socket is unavailable at startup, the agent logs a warning and **falls back to the local
-microphone** (with the built-in APM), so it still runs without the daemon. Default is off.
+microphone** (with the built-in APM), so it still runs without the daemon. If the daemon
+disconnects mid-session, the capture source **reconnects automatically** with exponential backoff.
+Default is off. Requires Linux or macOS (Unix domain sockets).
 
 ## Notes
 
