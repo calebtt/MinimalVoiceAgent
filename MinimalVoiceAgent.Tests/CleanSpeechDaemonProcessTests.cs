@@ -82,13 +82,13 @@ public class CleanSpeechDaemonProcessTests : IDisposable
     }
 
     [Fact]
-    public void IsSocketLive_ReturnsFalseForMissingPath()
+    public void TryProbeHandshake_ReturnsFalseForMissingPath()
     {
-        Assert.False(CleanSpeechDaemonProcess.IsSocketLive(Path.Combine(_dir, "missing.sock")));
+        Assert.False(CleanSpeechDaemonProcess.TryProbeHandshake(Path.Combine(_dir, "missing.sock")));
     }
 
     [Fact]
-    public void IsSocketLive_ReturnsFalseForStaleSocketFile()
+    public void TryProbeHandshake_ReturnsFalseForStaleSocketFile()
     {
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
             return;
@@ -96,11 +96,11 @@ public class CleanSpeechDaemonProcessTests : IDisposable
         var stale = Path.Combine(_dir, "stale.sock");
         File.WriteAllText(stale, string.Empty);
 
-        Assert.False(CleanSpeechDaemonProcess.IsSocketLive(stale));
+        Assert.False(CleanSpeechDaemonProcess.TryProbeHandshake(stale));
     }
 
     [Fact]
-    public void IsSocketLive_ReturnsTrueForListeningSocket()
+    public void TryProbeHandshake_ReturnsTrueWhenMetadataLineIsSent()
     {
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
             return;
@@ -110,6 +110,14 @@ public class CleanSpeechDaemonProcessTests : IDisposable
         server.Bind(new UnixDomainSocketEndPoint(path));
         server.Listen(1);
 
-        Assert.True(CleanSpeechDaemonProcess.IsSocketLive(path));
+        var acceptTask = Task.Run(() =>
+        {
+            using var client = server.Accept();
+            var metadata = "{\"format\":\"s16le\",\"sample_rate\":48000,\"channels\":1}\n"u8.ToArray();
+            client.Send(metadata);
+        });
+
+        Assert.True(CleanSpeechDaemonProcess.TryProbeHandshake(path));
+        acceptTask.Wait(TimeSpan.FromSeconds(2));
     }
 }

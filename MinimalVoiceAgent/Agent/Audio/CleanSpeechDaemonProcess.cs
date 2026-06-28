@@ -35,9 +35,9 @@ public sealed class CleanSpeechDaemonProcess : IAsyncDisposable
     /// </summary>
     public async Task<bool> EnsureStartedAsync(TimeSpan timeout, CancellationToken ct)
     {
-        if (IsSocketLive(_socketPath))
+        if (TryProbeHandshake(_socketPath))
         {
-            Log.Information("clean-speech-daemon already running (socket {Path} accepting connections); not starting another.", _socketPath);
+            Log.Information("clean-speech-daemon already running (socket {Path} handshake ok); not starting another.", _socketPath);
             return false;
         }
 
@@ -106,8 +106,12 @@ public sealed class CleanSpeechDaemonProcess : IAsyncDisposable
         return $"run --config \"{fullPath}\"";
     }
 
-    /// <summary>Returns true when a Unix socket path has a live listener (not a stale file).</summary>
-    internal static bool IsSocketLive(string socketPath)
+    /// <summary>
+    /// Returns true when a Unix socket has a live daemon listener. The probe completes the
+    /// JSON-metadata handshake (read through the newline) so the daemon accept loop is not left
+    /// blocked on a half-open client.
+    /// </summary>
+    internal static bool TryProbeHandshake(string socketPath)
     {
         if (string.IsNullOrWhiteSpace(socketPath) || !File.Exists(socketPath))
             return false;
@@ -118,8 +122,9 @@ public sealed class CleanSpeechDaemonProcess : IAsyncDisposable
         try
         {
             using var socket = new Socket(AddressFamily.Unix, SocketType.Stream, ProtocolType.Unspecified);
+            socket.ReceiveTimeout = 2000;
             socket.Connect(new UnixDomainSocketEndPoint(socketPath));
-            return true;
+            return ReadThroughNewline(socket);
         }
         catch (SocketException ex) when (ex.SocketErrorCode == SocketError.ConnectionRefused)
         {
@@ -131,12 +136,31 @@ public sealed class CleanSpeechDaemonProcess : IAsyncDisposable
         }
     }
 
+    private static bool ReadThroughNewline(Socket socket)
+    {
+        var one = new byte[1];
+        int bytesRead = 0;
+        while (bytesRead < CleanSpeechDaemonCaptureSource.MaxHeaderBytes)
+        {
+            int n = socket.Receive(one);
+            if (n == 0)
+                return false;
+            if (one[0] == (byte)'\n')
+                return true;
+            bytesRead++;
+        }
+
+        return false;
+    }
+
     private async Task WaitForSocketAsync(TimeSpan timeout, CancellationToken ct)
     {
         var deadline = DateTime.UtcNow + timeout;
         while (DateTime.UtcNow < deadline)
         {
-            if (IsSocketLive(_socketPath))
+            // Socket path appears on bind; do not connect-probe here — a connect without reading
+            // the metadata line blocks the daemon's accept loop for the real client.
+            if (File.Exists(_socketPath))
                 return;
             if (_process is { HasExited: true })
                 throw new InvalidOperationException($"clean-speech-daemon exited early (code {_process.ExitCode}) before publishing its socket.");
