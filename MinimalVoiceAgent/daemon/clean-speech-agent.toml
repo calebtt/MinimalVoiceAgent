@@ -28,7 +28,13 @@ delay_fine_tune_ms = 15
 delay_target_residual_corr = 0.15
 enable_reference_level_match = false
 enable_echo_cancellation = true
-echo_canceller = "nlms"
+# hybrid_localvqe (NKF + DTLN + LocalVQE) is the daemon's default and best-quality canceller.
+# Needs the neural extras in the daemon venv (scripts/setup-clean-speech-daemon.sh installs them);
+# if unavailable, the daemon auto-falls back to the dependency-free nlms filter.
+echo_canceller = "hybrid_localvqe"
+localvqe_blend = 0.7
+dtln_mask_smoothing = 0.6
+# nlms fallback tunables (used if neural extras are missing):
 echo_filter_taps = 4096
 echo_step_size = 0.3
 echo_filter_leak = 0.0001

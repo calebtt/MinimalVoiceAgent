@@ -30,9 +30,12 @@ git submodule update --init clean-speech
 scripts/setup-clean-speech-daemon.sh
 ```
 
-The setup script creates `clean-speech/.venv`, installs the daemon into it, and writes a default
-daemon config if you don't already have one. (Neural echo cancellers need extra deps — the script
-prints the one-liner to add them.)
+The setup script creates `clean-speech/.venv` and installs the daemon **with the neural extras**
+(`.[neural]` — onnxruntime, soxr, torch; large download). This is needed because the bundled
+profile's default echo canceller is **`hybrid_localvqe`** (NKF + DTLN + LocalVQE blend), the
+daemon's best-quality option. If the neural extras or models are missing, the daemon logs a
+warning and falls back to the dependency-free `nlms` canceller, so it still runs. The LocalVQE
+GGML libs/model are x86-64 Linux only.
 
 ## Configuration
 

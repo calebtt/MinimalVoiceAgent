@@ -14,7 +14,12 @@ fi
 echo "Creating virtualenv in $DAEMON_DIR/.venv ..."
 python3 -m venv "$DAEMON_DIR/.venv"
 "$DAEMON_DIR/.venv/bin/pip" install --upgrade pip
-"$DAEMON_DIR/.venv/bin/pip" install -e "$DAEMON_DIR"
+
+# Install with the [neural] extras (onnxruntime, soxr, torch) because the daemon's default
+# echo canceller is hybrid_localvqe. This pulls torch and is a large download. If you only want
+# the lightweight nlms canceller, install without the extras: pip install -e "$DAEMON_DIR"
+echo "Installing clean-speech-daemon with neural extras (this downloads torch; may take a while)..."
+"$DAEMON_DIR/.venv/bin/pip" install -e "$DAEMON_DIR[neural]"
 
 # Create a default daemon config if the user does not already have one.
 CONFIG="$HOME/.config/clean-speech-daemon/config.toml"
@@ -25,6 +30,4 @@ fi
 
 echo
 echo "Done. The agent auto-starts the daemon by default (see sttsettings.json Capture settings)."
-echo
-echo "Neural echo cancellers (dtln/nkf/hybrid) need extra deps in the daemon venv:"
-echo "  $DAEMON_DIR/.venv/bin/pip install onnxruntime torch"
+echo "Default echo canceller is hybrid_localvqe (neural); it falls back to nlms if anything is missing."
