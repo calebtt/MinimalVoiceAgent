@@ -3,12 +3,13 @@ using MinimalSileroVAD.Core;
 namespace MinimalVoiceAgent;
 
 /// <summary>
-/// Lightweight utterance segmenter for audio from <c>clean-speech-daemon</c>.
+/// Fallback utterance segmenter for daemon capture when <c>enable_vad = true</c> in the daemon
+/// profile (socket stream already gated to silence between speech; Silero on top would
+/// double-gate). Prefer <see cref="VadSpeechSegmenter"/> when the bundled profile keeps daemon
+/// VAD off — the shipped <c>clean-speech-agent.toml</c> does, so the agent uses Silero there.
 /// <para>
-/// The daemon already performs echo cancellation and noise suppression; when its own VAD is
-/// enabled the socket stream is gated to silence between speech. Running Silero VAD on top
-/// causes double segmentation. This segmenter uses frame energy instead, which works whether
-/// the daemon stream is gated or continuous.
+/// Fixed RMS thresholding can stick open on room noise or residual echo; this type is kept for
+/// the daemon-VAD-on case only.
 /// </para>
 /// </summary>
 public sealed class DaemonGatedSpeechSegmenter : IVadSpeechSegmenter
