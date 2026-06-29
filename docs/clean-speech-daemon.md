@@ -1,7 +1,7 @@
 # Clean-Speech-Daemon Capture
 
 The agent can take its microphone audio from the
-[`clean-speech-daemon`](https://github.com/calebtt/clean-speech) (bundled as the `clean-speech`
+[`clean-speech`](https://github.com/calebtt/clean-speech) daemon (bundled as the `clean-speech`
 submodule) instead of capturing the local mic directly.
 The daemon references the **system playback monitor**, so it removes *all* speaker output
 (the agent's own TTS, music, video, any app) plus background noise before the audio reaches STT —

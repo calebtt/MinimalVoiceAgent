@@ -1,6 +1,6 @@
 # Bundled daemon profile for MinimalVoiceAgent capture.
-# Echo cancellation and noise suppression stay on; VAD is off so the agent's own
-# segmenter (DaemonGatedSpeechSegmenter or Silero) is the single utterance gate.
+# Echo cancellation stays on (hybrid_localvqe); noise suppression and VAD are off, so the
+# agent's Silero VAD is the single utterance gate (no double-gating).
 
 [input]
 microphone = "auto"
